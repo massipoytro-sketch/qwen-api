@@ -7,3 +7,4 @@ export { analyzeWithAI } from "./ai";
 export { checkRateLimit } from "./rateLimit";
 export { detectAbuse } from "./abuse";
 export { upsertGraphEdge, buildSubjectGraph, findRelatedSubjects, scoreSubjectConnections } from "./graph";
+export { securityLog, auditSecurityEvent } from "./observability";
