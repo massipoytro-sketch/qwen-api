@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { supabase } from "../db/supabase";
+import { scoreSubjectConnections } from "./graph";
+import { securityLog } from "./observability";
 import type { SecurityCheckInput, SecurityCheckResult, SecurityDecision } from "./types";
 
 const inputSchema = z.object({
@@ -165,9 +167,26 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     });
   }
 
+  if (input.subjectId) {
+    const graphScore = await scoreSubjectConnections({ tenantId: input.tenantId, subjectId: input.subjectId });
+    if (graphScore.connectionScore > 0) {
+      signals.push({
+        signalName: "graph_connection_risk",
+        source: "graph",
+        score: graphScore.connectionScore,
+        confidence: 0.8,
+        evidence: {
+          riskyConnectionCount: graphScore.riskyConnectionCount,
+          relatedSubjectCount: graphScore.relatedSubjectCount,
+        },
+      });
+    }
+  }
+
   const score = aggregateRisk(signals);
   const riskLevel = riskLevelFor(score);
   const decision = decisionFor(score);
+  securityLog("security_check", { requestId: input.requestId ?? null, tenantId: input.tenantId, subjectId: input.subjectId ?? null, score, decision, signalCount: signals.length });
 
   const assessmentInsert = await supabase.schema("security").from("risk_assessments").insert({
     tenant_id: input.tenantId,
