@@ -67,17 +67,65 @@ export async function buildSubjectGraph(rawInput: { tenantId: string; subjectId:
   };
 }
 
+export async function findRelatedSubjects(rawInput: { tenantId: string; subjectId: string; limit?: number }) {
+  const input = z.object({
+    tenantId: z.uuid(),
+    subjectId: z.uuid(),
+    limit: z.number().int().min(1).max(100).default(50),
+  }).parse(rawInput);
+
+  const graph = await buildSubjectGraph(input);
+  const resources = graph.nodes.filter((node) => node.type !== "subject");
+  const related = new Map<string, { subjectId: string; sharedResources: number; confidence: number }>();
+
+  for (const resource of resources) {
+    const result = await supabase.schema("security").from("graph_edges")
+      .select("left_type,left_id,right_type,right_id,relationship,confidence")
+      .eq("tenant_id", input.tenantId)
+      .or(`and(left_type.eq.${resource.type},left_id.eq.${resource.id}),and(right_type.eq.${resource.type},right_id.eq.${resource.id})`)
+      .limit(200);
+
+    if (result.error) throw result.error;
+
+    for (const edge of result.data ?? []) {
+      const subjectId =
+        edge.left_type === "subject" ? edge.left_id :
+        edge.right_type === "subject" ? edge.right_id : null;
+      if (!subjectId || subjectId === input.subjectId) continue;
+
+      const current = related.get(subjectId) ?? {
+        subjectId, sharedResources: 0, confidence: 0,
+      };
+      current.sharedResources += 1;
+      current.confidence = Math.max(current.confidence, Number(edge.confidence ?? 0));
+      related.set(subjectId, current);
+    }
+  }
+
+  return [...related.values()]
+    .sort((a, b) => b.sharedResources - a.sharedResources || b.confidence - a.confidence)
+    .slice(0, input.limit);
+}
+
 export async function scoreSubjectConnections(rawInput: { tenantId: string; subjectId: string }) {
   const graph = await buildSubjectGraph(rawInput);
   const riskyRelationships = new Set(["shared_device","shared_ip","shared_identity","linked_session"]);
   const highConfidence = graph.edges.filter((edge) => Number(edge.confidence ?? 0) >= 0.8);
   const risky = highConfidence.filter((edge) => riskyRelationships.has(edge.relationship));
 
-  const connectionScore = Math.min(100, risky.length * 15 + Math.max(0, graph.nodeCount - 2) * 3);
+  const relatedSubjects = await findRelatedSubjects(rawInput);
+  const connectionScore = Math.min(
+    100,
+    risky.length * 15 +
+      Math.max(0, graph.nodeCount - 2) * 3 +
+      relatedSubjects.length * 10,
+  );
   return {
     connectionScore,
     connected: graph.edgeCount > 0,
     riskyConnectionCount: risky.length,
+    relatedSubjectCount: relatedSubjects.length,
+    relatedSubjects,
     graph,
   };
 }
