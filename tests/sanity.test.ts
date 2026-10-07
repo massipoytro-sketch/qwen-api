@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PROJECT_NAME, SECURITY_DECISIONS } from "../../src/index";
+import { PROJECT_NAME, SECURITY_DECISIONS } from "../src/index";
 
 describe("security foundation", () => {
   it("exposes the project identity", () => {
