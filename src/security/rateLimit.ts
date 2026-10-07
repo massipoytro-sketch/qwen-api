@@ -14,23 +14,31 @@ const inputSchema = z.object({
 export async function checkRateLimit(rawInput: z.input<typeof inputSchema>) {
   const input = inputSchema.parse(rawInput);
   const keyHash = hashValue(input.key);
-  const windowStart = new Date(Date.now() - input.windowSeconds * 1000).toISOString();
+  const now = Date.now();
+  const windowStartMs = now - input.windowSeconds * 1000;
+  const windowStart = new Date(windowStartMs).toISOString();
 
   const current = await supabase.schema("security").from("rate_limit_events")
-    .select("id,event_count")
+    .select("id,event_count,window_started_at")
     .eq("tenant_id", input.tenantId)
     .eq("key_hash", keyHash)
     .eq("bucket", input.bucket)
-    .gte("window_started_at", windowStart)
-    .order("window_started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .gte("window_started_at", windowStart);
 
   if (current.error) throw current.error;
 
-  const count = Number(current.data?.event_count ?? 0);
+  const count = (current.data ?? []).reduce(
+    (total, row) => total + Number(row.event_count ?? 0),
+    0,
+  );
+
   if (count >= input.limit) {
-    return { allowed: false, count, limit: input.limit, remaining: 0, resetAt: new Date(Date.now() + input.windowSeconds * 1000).toISOString() };
+    const oldest = [...(current.data ?? [])]
+      .sort((a, b) => new Date(a.window_started_at).getTime() - new Date(b.window_started_at).getTime())[0];
+    const resetAt = oldest
+      ? new Date(new Date(oldest.window_started_at).getTime() + input.windowSeconds * 1000).toISOString()
+      : new Date(now + input.windowSeconds * 1000).toISOString();
+    return { allowed: false, count, limit: input.limit, remaining: 0, resetAt };
   }
 
   const inserted = await supabase.schema("security").from("rate_limit_events").insert({
@@ -39,7 +47,7 @@ export async function checkRateLimit(rawInput: z.input<typeof inputSchema>) {
     key_hash: keyHash,
     bucket: input.bucket,
     event_count: 1,
-    window_started_at: new Date().toISOString(),
+    window_started_at: new Date(now).toISOString(),
   }).select("id").single();
 
   if (inserted.error) throw inserted.error;
