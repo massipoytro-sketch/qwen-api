@@ -7,6 +7,26 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "dependencies": {
+    "@fingerprintjs/fingerprintjs": "^5.2.0",
+    "@maxmind/geoip2-node": "^7.1.0",
+    "@noble/hashes": "^2.4.0",
+    "@supabase/supabase-js": "^2.117.3",
+    "disposable-email-domains": "^1.0.62",
+    "isbot": "^5.2.2",
+    "ua-parser-js": "^2.0.10",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.0",
+    "eslint": "^10.10.0",
+    "typescript": "^5.8.0",
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
