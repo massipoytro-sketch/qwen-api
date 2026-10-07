@@ -16,3 +16,10 @@ describe("security foundation", () => {
     ]);
   });
 });
+
+describe("risk boundaries", () => {
+  it("keeps the decision ordering explicit", () => {
+    expect(SECURITY_DECISIONS.indexOf("ALLOW")).toBe(0);
+    expect(SECURITY_DECISIONS.indexOf("BLOCK")).toBe(4);
+  });
+});
