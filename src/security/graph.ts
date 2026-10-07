@@ -109,17 +109,26 @@ export async function findRelatedSubjects(rawInput: { tenantId: string; subjectI
 
 export async function scoreSubjectConnections(rawInput: { tenantId: string; subjectId: string }) {
   const graph = await buildSubjectGraph(rawInput);
-  const riskyRelationships = new Set(["shared_device","shared_ip","shared_identity","linked_session"]);
+  const riskyRelationships = new Set([
+    "uses_device",
+    "uses_ip",
+    "owns_identity",
+    "linked_session",
+    "shared_device",
+    "shared_ip",
+    "shared_identity",
+  ]);
   const highConfidence = graph.edges.filter((edge) => Number(edge.confidence ?? 0) >= 0.8);
   const risky = highConfidence.filter((edge) => riskyRelationships.has(edge.relationship));
-
   const relatedSubjects = await findRelatedSubjects(rawInput);
+
   const connectionScore = Math.min(
     100,
     risky.length * 15 +
       Math.max(0, graph.nodeCount - 2) * 3 +
-      relatedSubjects.length * 10,
+      relatedSubjects.reduce((sum, item) => sum + Math.min(20, item.sharedResources * 10), 0),
   );
+
   return {
     connectionScore,
     connected: graph.edgeCount > 0,
