@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { supabase } from "../db/supabase";
+import { env } from "../config/env";
 import { scoreSubjectConnections } from "./graph";
+import { analyzeWithAI } from "./ai";
 import { securityLog } from "./observability";
 import type { SecurityCheckInput, SecurityCheckResult, SecurityDecision } from "./types";
 
@@ -179,6 +181,43 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
           riskyConnectionCount: graphScore.riskyConnectionCount,
           relatedSubjectCount: graphScore.relatedSubjectCount,
         },
+      });
+    }
+  }
+
+  const deterministicScore = aggregateRisk(signals);
+
+  if (env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL) {
+    try {
+      const ai = await analyzeWithAI({
+        tenantId: input.tenantId,
+        subjectId: input.subjectId,
+        sessionId: input.sessionId,
+        endpoint: env.AI_ANALYZER_ENDPOINT,
+        apiKey: env.AI_ANALYZER_API_KEY,
+        model: env.AI_ANALYZER_MODEL,
+        evidence: {
+          deterministicScore,
+          signals,
+        },
+      });
+      signals.push({
+        signalName: "ai_advisory",
+        source: "ai",
+        score: ai.riskScore,
+        confidence: Math.min(0.5, ai.confidence * 0.5),
+        evidence: {
+          riskLevel: ai.riskLevel,
+          reasonCodes: ai.reasonCodes,
+          recommendedAction: ai.recommendedAction,
+          predictionId: ai.predictionId,
+        },
+      });
+    } catch (error) {
+      securityLog("ai_advisory_failed", {
+        requestId: input.requestId ?? null,
+        tenantId: input.tenantId,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
       });
     }
   }
