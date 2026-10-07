@@ -27,7 +27,7 @@ const identityInputSchema = z.object({
 });
 
 const networkInputSchema = z.object({
-  tenantId: z.uuid(), ip: z.string().ip(), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(),
+  tenantId: z.uuid(), ip: z.ip(), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(),
   eventType: z.string().min(1).max(100).default("request"), reputationScore: z.number().min(0).max(100).optional(),
   countryCode: z.string().length(2).optional(), region: z.string().max(100).optional(), city: z.string().max(100).optional(),
   asn: z.number().int().positive().optional(), asOrg: z.string().max(255).optional(),
@@ -55,7 +55,7 @@ export async function registerDevice(rawInput: z.input<typeof deviceInputSchema>
     const updated = await supabase.schema("security").from("devices").update({
       platform: input.platform ?? null, os_family: input.osFamily ?? null,
       browser_family: input.browserFamily ?? null, device_family: input.deviceFamily ?? null,
-      confidence: input.confidence ?? existing.data.confidence, last_seen_at: new Date().toISOString(),
+      confidence: input.confidence ?? existing.data?.confidence ?? null, last_seen_at: new Date().toISOString(),
     }).eq("tenant_id", input.tenantId).eq("id", deviceId).select("id").single();
     if (updated.error) throw updated.error;
   } else {
