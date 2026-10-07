@@ -5,3 +5,4 @@ export { registerBotEvent, registerBehaviorEvent } from "./behavior";
 export { ingestSecurityEvent } from "./ingest";
 export { analyzeWithAI } from "./ai";
 export { checkRateLimit } from "./rateLimit";
+export { detectAbuse } from "./abuse";
