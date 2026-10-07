@@ -6,4 +6,4 @@ export { ingestSecurityEvent } from "./ingest";
 export { analyzeWithAI } from "./ai";
 export { checkRateLimit } from "./rateLimit";
 export { detectAbuse } from "./abuse";
-export { upsertGraphEdge, buildSubjectGraph, scoreSubjectConnections } from "./graph";
+export { upsertGraphEdge, buildSubjectGraph, findRelatedSubjects, scoreSubjectConnections } from "./graph";
