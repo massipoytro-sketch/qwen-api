@@ -1,0 +1,12 @@
+{
+  "name": "gainiren-security",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Open-source modular security and fraud-intelligence platform",
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint ."
+  }
+}
