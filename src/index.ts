@@ -8,3 +8,6 @@ export const SECURITY_DECISIONS = [
 ] as const;
 
 export type SecurityDecision = (typeof SECURITY_DECISIONS)[number];
+
+export { securityCheck } from "./security/check";
+export type { SecurityCheckInput, SecurityCheckResult } from "./security/types";
