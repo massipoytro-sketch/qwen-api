@@ -124,33 +124,33 @@ Decision Engine
 - [ ] Decision replay/debugging
 
 ### Phase 6 — Observability
-- [ ] Structured logging
+- [x] Structured logging baseline
 - [ ] OpenTelemetry traces
-- [ ] Metrics
-- [ ] Correlation/request IDs
+- [ ] Distributed metrics
+- [x] Correlation/request IDs
 - [ ] Error monitoring
 - [ ] Security telemetry dashboards
 - [ ] Alerting
 
 ### Phase 7 — Fraud graph
-- [ ] Device ↔ subject edges
-- [ ] IP ↔ subject edges
-- [ ] Identity ↔ subject edges
-- [ ] Session ↔ device/IP edges
-- [ ] Shared infrastructure detection
-- [ ] Suspicious cluster scoring
+- [x] Device ↔ subject edges
+- [x] IP ↔ subject edges
+- [x] Identity ↔ subject edges
+- [x] Session ↔ IP edges
+- [x] Shared infrastructure detection
+- [x] Suspicious connection scoring
 - [ ] Case evidence snapshots
 
 ### Phase 8 — ML/AI evidence layer
-- [ ] Feature schemas
-- [ ] Model registry
+- [x] Feature/evidence schema
+- [x] Model registry
 - [ ] Offline evaluation
-- [ ] Model versioning
-- [ ] Prediction storage
+- [x] Model versioning
+- [x] Prediction storage
 - [ ] Drift monitoring
-- [ ] Shadow mode
-- [ ] Human/rule override
-- [ ] Never allow an uncalibrated model to directly block users
+- [x] Advisory/shadow integration
+- [x] Human/rule override
+- [x] AI cannot directly override the deterministic decision
 
 ### Phase 9 — Abuse controls
 - [ ] Multi-dimensional rate limits
@@ -232,3 +232,35 @@ Every new dependency must have:
 - Keep tenant boundaries explicit in every query.
 - Prefer deterministic rules for critical safety controls.
 - Every security-sensitive change must be tested and verified.
+
+
+## Baseline completion — Phases 13–15
+
+### Phase 13 — Integrated intelligence
+- [x] Graph relationship semantics aligned with actual edge names
+- [x] Graph-derived risk signal added to deterministic scoring
+- [x] AI advisory analysis consumes normalized deterministic evidence
+- [x] AI prediction is stored and versioned
+- [x] AI failures fail open and are logged
+- [x] AI recommendation never overrides the deterministic decision
+
+### Phase 14 — Observability baseline
+- [x] Structured JSON security logs
+- [x] Request/correlation IDs
+- [x] Safe error responses without secrets
+- [x] Audit-event persistence already present in the risk path
+- [ ] OpenTelemetry/Sentry/central metrics remain optional production hardening
+
+### Phase 15 — Production API baseline
+- [x] Server-only Supabase access
+- [x] Tenant API-key hash column
+- [x] Bearer authentication
+- [x] Tenant status check
+- [x] Per-tenant security-check rate limit
+- [x] Request body size guard
+- [x] CORS configuration
+- [x] Health endpoint
+- [x] Security-check endpoint
+- [ ] Deploy API and configure production secrets
+- [ ] Provision/rotate tenant API keys
+- [ ] Run live smoke tests after deployment
