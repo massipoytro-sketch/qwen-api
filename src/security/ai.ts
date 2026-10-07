@@ -42,10 +42,7 @@ export async function analyzeWithAI(rawInput: z.input<typeof aiInputSchema>) {
             content:
               "You are a security evidence analyst. Analyze only supplied evidence. Do not invent facts. Return JSON only with riskScore, riskLevel, summary, reasonCodes, recommendedAction, confidence. Your recommendation is advisory and must not be treated as the final security decision.",
           },
-          {
-            role: "user",
-            content: JSON.stringify(input.evidence),
-          },
+          { role: "user", content: JSON.stringify(input.evidence) },
         ],
       }),
       signal: controller.signal,
@@ -61,27 +58,38 @@ export async function analyzeWithAI(rawInput: z.input<typeof aiInputSchema>) {
 
     const parsed = aiOutputSchema.parse(JSON.parse(content));
 
-    const version = await supabase.schema("security").from("model_versions").upsert({
-      model_name: input.model,
-      version: "advisory-v1",
-      status: "active",
-      feature_schema: { evidence: "security_evidence_v1" },
-      metrics: { mode: "advisory" },
-    }, { onConflict: "model_name,version" }).select("id").single();
-    if (version.error) throw version.error;
+    const existing = await supabase.schema("security").from("model_versions")
+      .select("id")
+      .eq("model_name", input.model)
+      .eq("version", "advisory-v1")
+      .maybeSingle();
+    if (existing.error) throw existing.error;
+
+    let modelVersionId = existing.data?.id;
+    if (!modelVersionId) {
+      const created = await supabase.schema("security").from("model_versions").insert({
+        model_name: input.model,
+        version: "advisory-v1",
+        status: "active",
+        feature_schema: { evidence: "security_evidence_v1" },
+        metrics: { mode: "advisory" },
+      }).select("id").single();
+      if (created.error) throw created.error;
+      modelVersionId = created.data.id;
+    }
 
     const prediction = await supabase.schema("security").from("model_predictions").insert({
       tenant_id: input.tenantId,
       subject_id: input.subjectId ?? null,
       session_id: input.sessionId ?? null,
-      model_version_id: version.data.id,
+      model_version_id: modelVersionId,
       prediction_type: "security_advisory",
       prediction_score: parsed.riskScore,
       prediction: parsed,
     }).select("id").single();
     if (prediction.error) throw prediction.error;
 
-    return { ...parsed, predictionId: prediction.data.id, modelVersionId: version.data.id };
+    return { ...parsed, predictionId: prediction.data.id, modelVersionId };
   } finally {
     clearTimeout(timer);
   }
