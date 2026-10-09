@@ -89,7 +89,6 @@ export default async function handler(request: Request) {
       bucket: "security-check",
       limit: 60,
       windowSeconds: 60,
-      subjectId: parsed.subjectId,
     });
 
     if (!limit.allowed) {
@@ -109,6 +108,9 @@ export default async function handler(request: Request) {
 
     return json({ ...result, requestId }, 200, requestId);
   } catch (error) {
+    if (error instanceof Error && ["SUBJECT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_SUBJECT_MISMATCH", "SESSION_NOT_ACTIVE"].includes(error.message)) {
+      return json({ error: "INVALID_CONTEXT", requestId }, 400, requestId);
+    }
     if (error instanceof z.ZodError) {
       return json({ error: "INVALID_REQUEST", requestId }, 400, requestId);
     }
