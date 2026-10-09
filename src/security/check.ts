@@ -107,8 +107,9 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
       : Promise.resolve({ data: null, error: null }),
     input.subjectId
       ? supabase.schema("security").from("activity_anomalies")
-          .select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version")
+          .select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version,occurred_at")
           .eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId)
+          .gte("occurred_at", new Date(Date.now() - 15 * 60 * 1000).toISOString())
           .order("occurred_at", { ascending: false }).limit(1).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
   ]);
