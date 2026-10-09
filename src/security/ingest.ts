@@ -69,6 +69,12 @@ const valuePayload = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
+const securityPayload = z.object({
+  eventType: z.string().min(1).max(100).default("security_event"),
+  severity: z.enum(["debug", "info", "notice", "warning", "high", "critical"]).default("info"),
+  source: z.string().min(1).max(100).default("ingestion"),
+}).passthrough();
+
 export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>) {
   const input = eventSchema.parse(rawInput);
 
@@ -159,11 +165,12 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
   }
 
   await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId });
+  const payload = securityPayload.parse(input.payload);
   const result = await supabase.schema("security").from("security_events").insert({
     tenant_id: input.tenantId, subject_id: input.subjectId ?? null, session_id: input.sessionId ?? null,
-    event_type: String(input.payload.eventType ?? "security_event"),
-    severity: String(input.payload.severity ?? "info"),
-    source: String(input.payload.source ?? "ingestion"),
+    event_type: payload.eventType,
+    severity: payload.severity,
+    source: payload.source,
     payload: input.payload,
   }).select("id").single();
 
