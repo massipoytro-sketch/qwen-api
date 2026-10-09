@@ -17,6 +17,7 @@ const analyticsPayloadSchema = z.object({
     valueDelta: z.number().finite().optional(),
     botScore: z.number().min(0).max(100).optional(),
     behaviorScore: z.number().min(0).max(100).optional(),
+    valueEventId: z.uuid().optional(),
   })).max(500),
 });
 const analyticsResponseSchema = z.object({
@@ -72,7 +73,17 @@ async function handleDuckDbBatch(event: OutboxEvent) {
       const subjectId = anomaly.subjectHash ? subjectLookup.get(anomaly.subjectHash) : undefined;
       const sessionId = anomaly.sessionHash ? sessionLookup.get(anomaly.sessionHash) : undefined;
       if (!subjectId) continue; // Findings without a mapped subject remain in aggregate analytics only.
-      const dedupeKey = hashValue(`${event.id}:${anomaly.type}:${subjectId}:${sessionId ?? ""}`);
+      if (anomaly.type === "value_jump") {
+        const sourceEvent = payload.events.find((row) => row.valueEventId && row.subjectId === subjectId && row.valueDelta !== undefined && Number(row.valueDelta) === Number(anomaly.evidence.delta));
+        if (sourceEvent?.valueEventId) {
+          const directAnomaly = await supabase.schema("security").from("activity_anomalies").select("id")
+            .eq("tenant_id", payload.tenantId).eq("source_event_id", sourceEvent.valueEventId).maybeSingle();
+          if (directAnomaly.error) throw directAnomaly.error;
+          if (directAnomaly.data) continue; // The transactionally recorded value-jump rule already covers this source event.
+        }
+      }
+      const fiveMinuteBucket = Math.floor(Date.now() / (5 * 60_000));
+      const dedupeKey = hashValue(`${payload.tenantId}:${fiveMinuteBucket}:${anomaly.type}:${subjectId}:${sessionId ?? ""}`);
       const write = await supabase.schema("security").from("activity_anomalies").upsert({
         tenant_id: payload.tenantId,
         subject_id: subjectId,
