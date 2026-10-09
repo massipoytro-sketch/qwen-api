@@ -7,6 +7,9 @@ const envSchema = z.object({
   AI_ANALYZER_ENDPOINT: z.url().optional(),
   AI_ANALYZER_API_KEY: z.string().min(1).optional(),
   AI_ANALYZER_MODEL: z.string().min(1).max(200).optional(),
+  OUTBOX_WORKER_TOKEN: z.string().min(32).optional(),
+  DUCKDB_ANALYTICS_URL: z.url().optional(),
+  DUCKDB_ANALYTICS_TOKEN: z.string().min(32).optional(),
 }).superRefine((value, ctx) => {
   const configured = [
     value.AI_ANALYZER_ENDPOINT,
@@ -21,6 +24,10 @@ const envSchema = z.object({
       message: "AI analyzer configuration must set endpoint, key, and model together",
     });
   }
+  const duckDbConfigured = [value.DUCKDB_ANALYTICS_URL, value.DUCKDB_ANALYTICS_TOKEN].filter(Boolean).length;
+  if (duckDbConfigured !== 0 && duckDbConfigured !== 2) {
+    ctx.addIssue({ code: "custom", path: ["DUCKDB_ANALYTICS_URL"], message: "DuckDB worker URL and token must be configured together" });
+  }
 });
 
 export const env = envSchema.parse({
@@ -30,4 +37,7 @@ export const env = envSchema.parse({
   AI_ANALYZER_ENDPOINT: process.env.AI_ANALYZER_ENDPOINT,
   AI_ANALYZER_API_KEY: process.env.AI_ANALYZER_API_KEY,
   AI_ANALYZER_MODEL: process.env.AI_ANALYZER_MODEL,
+  OUTBOX_WORKER_TOKEN: process.env.OUTBOX_WORKER_TOKEN,
+  DUCKDB_ANALYTICS_URL: process.env.DUCKDB_ANALYTICS_URL,
+  DUCKDB_ANALYTICS_TOKEN: process.env.DUCKDB_ANALYTICS_TOKEN,
 });
