@@ -44,18 +44,7 @@ async function enqueueIngested(input: {
 const networkPayload = z.object({
   ip: z.string().refine((value) => isIP(value) !== 0, "Invalid IP address"),
   eventType: z.string().min(1).max(100).optional(),
-  reputationScore: z.number().min(0).max(100).optional(),
-  countryCode: z.string().length(2).optional(),
-  region: z.string().max(100).optional(),
-  city: z.string().max(100).optional(),
-  asn: z.number().int().positive().optional(),
-  asOrg: z.string().max(255).optional(),
-  isProxy: z.boolean().optional(),
-  isVpn: z.boolean().optional(),
-  isTor: z.boolean().optional(),
-  isDatacenter: z.boolean().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
+}).strict();
 
 const botPayload = z.object({
   botType: z.string().min(1).max(100).optional(),
