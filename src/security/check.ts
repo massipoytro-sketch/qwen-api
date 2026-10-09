@@ -48,7 +48,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     ipId ? supabase.schema("security").from("ip_addresses").select("id,reputation_score,is_proxy,is_vpn,is_tor,is_datacenter").eq("id", ipId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     input.sessionId ? supabase.schema("security").from("bot_events").select("observed_at,is_bot,confidence,signals").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("observed_at", new Date(Date.now() - 10 * 60_000).toISOString()).order("observed_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
     input.sessionId ? supabase.schema("security").from("behavior_events").select("anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
-    input.subjectId ? supabase.schema("security").from("activity_anomalies").select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version,occurred_at").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
+    input.subjectId ? supabase.schema("security").from("activity_anomalies").select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version,occurred_at,source_event_id").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
     input.sessionId ? supabase.schema("security").from("behavior_events").select("occurred_at,event_type,anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: true }).limit(200) : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult]) if (result.error) throw result.error;
@@ -144,7 +144,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   if (input.subjectId && graphScoreInfo && graphScoreInfo.relatedSubjects.length >= 2) {
     backgroundTasks.push(upsertFraudCluster({ tenantId: input.tenantId, clusterType: "mixed", subjectIds: [input.subjectId, ...graphScoreInfo.relatedSubjects.map((subject) => subject.subjectId)], riskScore: graphScoreInfo.connectionScore, evidence: { relatedSubjectCount: graphScoreInfo.relatedSubjectCount, riskyConnectionCount: graphScoreInfo.riskyConnectionCount, version: "fraud-clusters-v1" } }));
   }
-  const analyticsEventRows = (velocityResult.data ?? []).map((event) => ({
+  const analyticsEventRows: Array<{ subjectId?: string; sessionId?: string; eventType: string; occurredAt: string; valueDelta?: number; botScore?: number; behaviorScore?: number; valueEventId?: string }> = (velocityResult.data ?? []).map((event) => ({
     subjectId: input.subjectId,
     sessionId: input.sessionId,
     eventType: event.event_type,
@@ -160,6 +160,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
       eventType: "value_change",
       occurredAt: valueAnomaly.occurred_at,
       valueDelta,
+      valueEventId: valueAnomaly.source_event_id ?? undefined,
       behaviorScore: 0,
     });
   }
