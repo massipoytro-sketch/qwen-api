@@ -66,7 +66,6 @@ export default async function handler(request: Request) {
       bucket: "security-event-ingest",
       limit: 120,
       windowSeconds: 60,
-      subjectId: parsed.subjectId,
     });
     if (!limit.allowed) {
       return json({
@@ -85,6 +84,9 @@ export default async function handler(request: Request) {
     });
     return json({ ...result, requestId }, 201, requestId);
   } catch (error) {
+    if (error instanceof Error && ["SUBJECT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_SUBJECT_MISMATCH", "SESSION_NOT_ACTIVE"].includes(error.message)) {
+      return json({ error: "INVALID_CONTEXT", requestId }, 400, requestId);
+    }
     if (error instanceof z.ZodError) return json({ error: "INVALID_REQUEST", requestId }, 400, requestId);
     securityLog("ingestion_api_error", { requestId, errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR" });
     return json({ error: "INTERNAL_ERROR", requestId }, 500, requestId);
