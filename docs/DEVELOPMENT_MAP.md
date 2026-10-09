@@ -106,8 +106,8 @@ Decision Engine
 - [x] Confidence
 - [x] Source diversity
 - [x] High-signal reinforcement
-- [ ] Time decay
-- [ ] Signal freshness
+- [x] Signal freshness windows for bot, behavior, and activity anomalies
+- [ ] Score time decay
 - [ ] Correlation-aware scoring
 - [ ] Policy/rule layer
 - [ ] Explainable reason codes
@@ -153,12 +153,14 @@ Decision Engine
 - [x] AI cannot directly override the deterministic decision
 
 ### Phase 9 — Abuse controls
+- [x] Atomic per-tenant/key/bucket rate limiting (concurrency-safe)
 - [ ] Multi-dimensional rate limits
 - [ ] IP / subject / session / route buckets
 - [ ] Progressive penalties
 - [ ] Abuse velocity detection
 - [ ] Resource exhaustion protection
-- [ ] Request body limits
+- [x] Request body limits (64 KiB, actual byte length)
+- [ ] Request body limits (streaming/platform hard cap)
 - [ ] Timeout budgets
 
 ### Phase 10 — Security engineering
@@ -264,3 +266,16 @@ Every new dependency must have:
 - [ ] Deploy API and configure production secrets
 - [ ] Provision/rotate tenant API keys
 - [ ] Run live smoke tests after deployment
+
+
+## Integrity hardening — 2026-10-09
+
+- [x] Value state is stored server-side per tenant/subject/value type.
+- [x] Client-supplied previous values are no longer accepted.
+- [x] Value event updates are transactional and idempotent.
+- [x] Value-jump anomaly rows are persisted in the same transaction as their source event.
+- [x] Rate-limit decisions are serialized with transaction-scoped advisory locks.
+- [x] Old bot, behavior, and value anomaly signals expire from current risk checks.
+- [x] Cross-origin access is disabled by default; configure a specific origin only when a browser client needs it.
+- [ ] End-to-end DB transaction tests with provisioned test tenant/subject.
+- [ ] Production deployment and live negative tests remain pending.
