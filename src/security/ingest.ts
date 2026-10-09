@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { z } from "zod";
 import { supabase } from "../db/supabase";
 import { registerNetworkEvent } from "./intelligence";
+import { scoreValueJump } from "./valueAnomaly";
 import { registerBotEvent, registerBehaviorEvent } from "./behavior";
 
 const base = z.object({
@@ -103,11 +104,8 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
       baseline: boolean;
     };
     const delta = Number(data.delta);
+    const jumpScore = scoreValueJump(delta, data.baseline);
     const absoluteJump = Math.abs(delta);
-    const jumpScore = data.baseline ? 0 :
-      absoluteJump >= 10000 ? 100 :
-      absoluteJump >= 1000 ? 80 :
-      absoluteJump >= 500 ? 50 : 0;
 
     if (jumpScore > 0 && !data.duplicate) {
       const anomaly = await supabase.schema("security").from("activity_anomalies").insert({
