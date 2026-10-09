@@ -46,10 +46,9 @@ const behaviorPayload = z.object({
 
 const valuePayload = z.object({
   valueType: z.string().min(1).max(100),
-  previousValue: z.number().finite(),
   currentValue: z.number().finite(),
+  idempotencyKey: z.string().min(8).max(200),
   source: z.string().min(1).max(100).default("system"),
-  occurredAt: z.iso.datetime().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -80,25 +79,36 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
   if (input.type === "value") {
     if (!input.subjectId) throw new Error("VALUE_EVENT_SUBJECT_REQUIRED");
     const payload = valuePayload.parse(input.payload);
-    const result = await supabase.schema("security").from("value_events").insert({
-      tenant_id: input.tenantId,
-      subject_id: input.subjectId,
-      session_id: input.sessionId ?? null,
-      value_type: payload.valueType,
-      previous_value: payload.previousValue,
-      current_value: payload.currentValue,
-      source: payload.source,
-      occurred_at: payload.occurredAt ?? new Date().toISOString(),
-      metadata: payload.metadata ?? {},
-    }).select("id,delta_value").single();
+    const recorded = await supabase.schema("security").rpc("record_value_event", {
+      p_tenant_id: input.tenantId,
+      p_subject_id: input.subjectId,
+      p_session_id: input.sessionId ?? null,
+      p_value_type: payload.valueType,
+      p_current_value: payload.currentValue,
+      p_source: payload.source,
+      p_idempotency_key: payload.idempotencyKey,
+      p_occurred_at: new Date().toISOString(),
+      p_metadata: payload.metadata ?? {},
+    });
 
-    if (result.error) throw result.error;
-
-    const delta = Number(result.data.delta_value);
+    if (recorded.error) throw recorded.error;
+    const data = recorded.data as {
+      valueEventId: string;
+      previousValue: number | string;
+      currentValue: number | string;
+      delta: number | string;
+      version: number;
+      duplicate: boolean;
+      baseline: boolean;
+    };
+    const delta = Number(data.delta);
     const absoluteJump = Math.abs(delta);
-    const jumpScore = absoluteJump >= 10000 ? 100 : absoluteJump >= 1000 ? 80 : absoluteJump >= 500 ? 50 : 0;
+    const jumpScore = data.baseline ? 0 :
+      absoluteJump >= 10000 ? 100 :
+      absoluteJump >= 1000 ? 80 :
+      absoluteJump >= 500 ? 50 : 0;
 
-    if (jumpScore > 0) {
+    if (jumpScore > 0 && !data.duplicate) {
       const anomaly = await supabase.schema("security").from("activity_anomalies").insert({
         tenant_id: input.tenantId,
         subject_id: input.subjectId,
@@ -109,17 +119,30 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
         reason_codes: [absoluteJump >= 10000 ? "EXTREME_VALUE_JUMP" : "LARGE_VALUE_JUMP"],
         evidence: {
           valueType: payload.valueType,
-          previousValue: payload.previousValue,
-          currentValue: payload.currentValue,
+          previousValue: Number(data.previousValue),
+          currentValue: Number(data.currentValue),
           delta,
+          stateVersion: data.version,
         },
-        analyzer_version: "value-jump-v1",
-        occurred_at: payload.occurredAt ?? new Date().toISOString(),
+        analyzer_version: "value-jump-v2",
+        occurred_at: new Date().toISOString(),
       });
       if (anomaly.error) throw anomaly.error;
     }
 
-    return { type: input.type, result: { valueEventId: result.data.id, delta, jumpScore } };
+    return {
+      type: input.type,
+      result: {
+        valueEventId: data.valueEventId,
+        previousValue: Number(data.previousValue),
+        currentValue: Number(data.currentValue),
+        delta,
+        jumpScore,
+        stateVersion: data.version,
+        duplicate: data.duplicate,
+        baseline: data.baseline,
+      },
+    };
   }
 
   const result = await supabase.schema("security").from("security_events").insert({
