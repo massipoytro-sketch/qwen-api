@@ -26,4 +26,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Validate
+        env:
+          SUPABASE_URL: https://ci-placeholder.supabase.co
+          SUPABASE_SERVER_KEY: ci-placeholder-not-a-real-secret
         run: pnpm check
