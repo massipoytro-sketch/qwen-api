@@ -14,7 +14,7 @@ const requestSchema = z.object({
   payload: z.record(z.string(), z.unknown()),
 }).strict();
 
-const json = (body: unknown, status = 200, requestId?: string) => new Response(JSON.stringify(body), {
+const json = (body: unknown, status = 200, requestId?: string) => new Response(status === 204 ? null : JSON.stringify(body), {
   status,
   headers: {
     "content-type": "application/json; charset=utf-8",
