@@ -6,6 +6,7 @@ import { registerBotEvent, registerBehaviorEvent } from "./behavior";
 import { enqueueSecurityEvent } from "./platform";
 import { securityLog } from "./observability";
 import { env } from "../config/env";
+import { assertTenantScope } from "./scope";
 
 const base = z.object({
   tenantId: z.uuid(),
@@ -168,6 +169,7 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
     };
   }
 
+  await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId });
   const result = await supabase.schema("security").from("security_events").insert({
     tenant_id: input.tenantId, subject_id: input.subjectId ?? null, session_id: input.sessionId ?? null,
     event_type: String(input.payload.eventType ?? "security_event"),
