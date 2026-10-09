@@ -3,6 +3,9 @@ import { z } from "zod";
 import { supabase } from "../db/supabase";
 import { registerNetworkEvent } from "./intelligence";
 import { registerBotEvent, registerBehaviorEvent } from "./behavior";
+import { enqueueSecurityEvent } from "./platform";
+import { securityLog } from "./observability";
+import { env } from "../config/env";
 
 const base = z.object({
   tenantId: z.uuid(),
@@ -13,6 +16,29 @@ const eventSchema = base.extend({
   type: z.enum(["network", "bot", "behavior", "value", "security"]),
   payload: z.record(z.string(), z.unknown()),
 });
+
+async function enqueueIngested(input: {
+  tenantId: string;
+  type: "network" | "bot" | "behavior" | "value" | "security";
+  aggregateId: string;
+  payload: Record<string, unknown>;
+}) {
+  try {
+    await enqueueSecurityEvent({
+      tenantId: input.tenantId,
+      eventType: `security.ingestion.${input.type}`,
+      aggregateId: input.aggregateId,
+      dedupeKey: `${input.type}:${input.aggregateId}`,
+      payload: input.payload,
+    });
+  } catch (error) {
+    securityLog("ingestion_outbox_enqueue_failed", {
+      tenantId: input.tenantId,
+      eventType: input.type,
+      errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+    });
+  }
+}
 
 const networkPayload = z.object({
   ip: z.string().refine((value) => isIP(value) !== 0, "Invalid IP address"),
@@ -58,23 +84,29 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
 
   if (input.type === "network") {
     const payload = networkPayload.parse(input.payload);
-    return { type: input.type, result: await registerNetworkEvent({
+    const result = await registerNetworkEvent({
       tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId, ...payload,
-    }) };
+    });
+    await enqueueIngested({ tenantId: input.tenantId, type: "network", aggregateId: result.eventId, payload: { subjectId: input.subjectId ?? null, sessionId: input.sessionId ?? null, ipId: result.ipId, riskScore: result.riskScore } });
+    return { type: input.type, result };
   }
 
   if (input.type === "bot") {
     const payload = botPayload.parse(input.payload);
-    return { type: input.type, result: await registerBotEvent({
+    const result = await registerBotEvent({
       tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId, ...payload,
-    }) };
+    });
+    await enqueueIngested({ tenantId: input.tenantId, type: "bot", aggregateId: result.botEventId, payload: { subjectId: input.subjectId ?? null, sessionId: input.sessionId ?? null, isBot: result.isBot, confidence: result.confidence, riskScore: result.riskScore } });
+    return { type: input.type, result };
   }
 
   if (input.type === "behavior") {
     const payload = behaviorPayload.parse(input.payload);
-    return { type: input.type, result: await registerBehaviorEvent({
+    const result = await registerBehaviorEvent({
       tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId, ...payload,
-    }) };
+    });
+    await enqueueIngested({ tenantId: input.tenantId, type: "behavior", aggregateId: result.behaviorEventId, payload: { subjectId: input.subjectId ?? null, sessionId: input.sessionId ?? null, eventType: payload.eventType, anomalyScore: result.anomalyScore } });
+    return { type: input.type, result };
   }
 
   if (input.type === "value") {
@@ -107,6 +139,20 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
     const delta = Number(data.delta);
     const jumpScore = Number(data.jumpScore ?? 0);
 
+    await enqueueIngested({ tenantId: input.tenantId, type: "value", aggregateId: data.valueEventId, payload: { subjectId: input.subjectId, sessionId: input.sessionId ?? null, valueType: payload.valueType, previousValue: Number(data.previousValue), currentValue: Number(data.currentValue), delta, jumpScore, duplicate: data.duplicate, stateVersion: data.version } });
+    if (!data.duplicate && Math.abs(delta) >= 500 && env.DUCKDB_ANALYTICS_URL && env.DUCKDB_ANALYTICS_TOKEN) {
+      try {
+        await enqueueSecurityEvent({
+          tenantId: input.tenantId,
+          eventType: "analytics.duckdb_batch",
+          aggregateId: data.valueEventId,
+          dedupeKey: `duckdb:value:${data.valueEventId}`,
+          payload: { tenantId: input.tenantId, events: [{ subjectId: input.subjectId, sessionId: input.sessionId, eventType: "value_change", occurredAt: new Date().toISOString(), valueDelta: delta, valueEventId: data.valueEventId }] },
+        });
+      } catch (error) {
+        securityLog("analytics_outbox_enqueue_failed", { tenantId: input.tenantId, eventType: "value_change", errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR" });
+      }
+    }
     return {
       type: input.type,
       result: {
@@ -131,5 +177,6 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
   }).select("id").single();
 
   if (result.error) throw result.error;
+  await enqueueIngested({ tenantId: input.tenantId, type: "security", aggregateId: result.data.id, payload: { subjectId: input.subjectId ?? null, sessionId: input.sessionId ?? null, eventType: String(input.payload.eventType ?? "security_event"), severity: String(input.payload.severity ?? "info"), source: String(input.payload.source ?? "ingestion") } });
   return { type: input.type, result: { securityEventId: result.data.id } };
 }
