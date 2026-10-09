@@ -33,8 +33,8 @@ const networkInputSchema = z.object({
   eventType: z.string().min(1).max(100).default("request"), reputationScore: z.number().min(0).max(100).optional(),
   countryCode: z.string().length(2).optional(), region: z.string().max(100).optional(), city: z.string().max(100).optional(),
   asn: z.number().int().positive().optional(), asOrg: z.string().max(255).optional(),
-  isProxy: z.boolean().default(false), isVpn: z.boolean().default(false), isTor: z.boolean().default(false),
-  isDatacenter: z.boolean().default(false), metadata: z.record(z.string(), z.unknown()).optional(),
+  isProxy: z.boolean().optional(), isVpn: z.boolean().optional(), isTor: z.boolean().optional(),
+  isDatacenter: z.boolean().optional(), metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const hashStableKey = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -108,11 +108,27 @@ export async function registerIdentity(rawInput: z.input<typeof identityInputSch
 export async function registerNetworkEvent(rawInput: z.input<typeof networkInputSchema>) {
   const input = networkInputSchema.parse(rawInput);
   await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId });
+  const existingIp = await supabase.schema("security").from("ip_addresses")
+    .select("id,country_code,region,city,asn,as_org,is_proxy,is_vpn,is_tor,is_datacenter,reputation_score,metadata")
+    .eq("ip", input.ip).maybeSingle();
+  if (existingIp.error) throw existingIp.error;
+  const existingMetadata = existingIp.data?.metadata && typeof existingIp.data.metadata === "object" && !Array.isArray(existingIp.data.metadata)
+    ? existingIp.data.metadata as Record<string, unknown>
+    : {};
   const ipResult = await supabase.schema("security").from("ip_addresses").upsert({
-    ip: input.ip, country_code: input.countryCode ?? null, region: input.region ?? null, city: input.city ?? null,
-    asn: input.asn ?? null, as_org: input.asOrg ?? null, is_proxy: input.isProxy, is_vpn: input.isVpn,
-    is_tor: input.isTor, is_datacenter: input.isDatacenter, reputation_score: input.reputationScore ?? null,
-    last_seen_at: new Date().toISOString(), metadata: input.metadata ?? {},
+    ip: input.ip,
+    country_code: input.countryCode ?? existingIp.data?.country_code ?? null,
+    region: input.region ?? existingIp.data?.region ?? null,
+    city: input.city ?? existingIp.data?.city ?? null,
+    asn: input.asn ?? existingIp.data?.asn ?? null,
+    as_org: input.asOrg ?? existingIp.data?.as_org ?? null,
+    is_proxy: input.isProxy ?? existingIp.data?.is_proxy ?? false,
+    is_vpn: input.isVpn ?? existingIp.data?.is_vpn ?? false,
+    is_tor: input.isTor ?? existingIp.data?.is_tor ?? false,
+    is_datacenter: input.isDatacenter ?? existingIp.data?.is_datacenter ?? false,
+    reputation_score: input.reputationScore ?? existingIp.data?.reputation_score ?? null,
+    last_seen_at: new Date().toISOString(),
+    metadata: { ...existingMetadata, ...(input.metadata ?? {}) },
   }, { onConflict: "ip" }).select("id").single();
   if (ipResult.error) throw ipResult.error;
 
