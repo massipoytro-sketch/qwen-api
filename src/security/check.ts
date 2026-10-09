@@ -48,7 +48,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     ipId ? supabase.schema("security").from("ip_addresses").select("id,reputation_score,is_proxy,is_vpn,is_tor,is_datacenter").eq("id", ipId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     input.sessionId ? supabase.schema("security").from("bot_events").select("observed_at,is_bot,confidence,signals").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("observed_at", new Date(Date.now() - 10 * 60_000).toISOString()).order("observed_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
     input.sessionId ? supabase.schema("security").from("behavior_events").select("anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
-    input.subjectId ? supabase.schema("security").from("activity_anomalies").select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version,occurred_at,source_event_id").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
+    input.subjectId ? supabase.schema("security").from("activity_anomalies").select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version,occurred_at,source_event_id").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(20) : Promise.resolve({ data: [], error: null }),
     input.sessionId ? supabase.schema("security").from("behavior_events").select("occurred_at,event_type,anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: true }).limit(200) : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult]) if (result.error) throw result.error;
@@ -87,8 +87,29 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     }
   }
 
-  const valueAnomaly = anomalyResult.data;
-  if (valueAnomaly && Number(valueAnomaly.score) > 0) signals.push({ signalName: "value_jump_anomaly", source: "activity_anomaly", score: clamp(Number(valueAnomaly.score)), confidence: Number(valueAnomaly.confidence ?? 0.75), evidence: { anomalyType: valueAnomaly.anomaly_type, reasonCodes: valueAnomaly.reason_codes, evidence: valueAnomaly.evidence, analyzerVersion: valueAnomaly.analyzer_version } });
+  const recentActivityAnomalies = anomalyResult.data ?? [];
+  for (const anomaly of recentActivityAnomalies) {
+    const anomalyScore = clamp(Number(anomaly.score ?? 0));
+    if (anomalyScore <= 0) continue;
+    const evidence = {
+      anomalyType: anomaly.anomaly_type,
+      reasonCodes: anomaly.reason_codes,
+      evidence: anomaly.evidence,
+      analyzerVersion: anomaly.analyzer_version,
+    };
+    if (anomaly.anomaly_type === "value_jump") {
+      signals.push({ signalName: "value_jump_anomaly", source: "activity_anomaly", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.75), evidence });
+    } else if (anomaly.anomaly_type === "activity_velocity") {
+      signals.push({ signalName: "analytics_velocity_anomaly", source: "duckdb_analytics", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.7), evidence });
+    } else if (anomaly.anomaly_type === "advanced_bot") {
+      signals.push({ signalName: "analytics_bot_anomaly", source: "duckdb_analytics", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.7), evidence });
+    } else if (anomaly.anomaly_type === "behavioral_deviation") {
+      signals.push({ signalName: "analytics_behavior_anomaly", source: "duckdb_analytics", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.7), evidence });
+    } else {
+      signals.push({ signalName: "analytics_anomaly", source: "duckdb_analytics", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.5), evidence });
+    }
+  }
+  const valueAnomaly = recentActivityAnomalies.find((anomaly) => anomaly.anomaly_type === "value_jump") ?? null;
 
   let graphScoreInfo: Awaited<ReturnType<typeof scoreSubjectConnections>> | null = null;
   if (input.subjectId) {
