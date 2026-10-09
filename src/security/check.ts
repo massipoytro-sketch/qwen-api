@@ -151,6 +151,15 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     occurredAt: event.occurred_at,
     ...(event.anomaly_score === null || event.anomaly_score === undefined ? {} : { behaviorScore: clamp(Number(event.anomaly_score)) }),
   }));
+  for (const botEvent of botResult.data ?? []) {
+    analyticsEventRows.push({
+      subjectId: input.subjectId,
+      sessionId: input.sessionId,
+      eventType: "bot_detection",
+      occurredAt: botEvent.observed_at,
+      botScore: botEvent.is_bot ? clamp(Math.round(Number(botEvent.confidence ?? 0) * 100)) : 0,
+    });
+  }
   if (valueAnomaly && input.subjectId) {
     const valueEvidence = valueAnomaly.evidence as Record<string, unknown>;
     const valueDelta = Number(valueEvidence.delta);
