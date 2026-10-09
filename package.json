@@ -11,7 +11,6 @@
     "check": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "dependencies": {
-    "@duckdb/node-api": "^1.5.6",
     "@fingerprintjs/fingerprintjs": "^5.2.0",
     "@maxmind/geoip2-node": "^7.1.0",
     "@noble/hashes": "^2.4.0",
