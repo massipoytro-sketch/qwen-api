@@ -29,7 +29,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   const [tenantResult, subjectResult, sessionResult] = await Promise.all([
     supabase.schema("security").from("tenants").select("id,status").eq("id", input.tenantId).maybeSingle(),
     input.subjectId ? supabase.schema("security").from("subjects").select("id,status,risk_level").eq("tenant_id", input.tenantId).eq("id", input.subjectId).maybeSingle() : Promise.resolve({ data: null, error: null }),
-    input.sessionId ? supabase.schema("security").from("sessions").select("id,subject_id,device_id,ip_id").eq("tenant_id", input.tenantId).eq("id", input.sessionId).maybeSingle() : Promise.resolve({ data: null, error: null }),
+    input.sessionId ? supabase.schema("security").from("sessions").select("id,subject_id,device_id,ip_id,ended_at").eq("tenant_id", input.tenantId).eq("id", input.sessionId).maybeSingle() : Promise.resolve({ data: null, error: null }),
   ]);
   if (tenantResult.error) throw tenantResult.error;
   if (!tenantResult.data) throw new Error("TENANT_NOT_FOUND");
@@ -38,6 +38,8 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   if (sessionResult.error) throw sessionResult.error;
   if (input.subjectId && !subjectResult.data) throw new Error("SUBJECT_NOT_FOUND");
   if (input.sessionId && !sessionResult.data) throw new Error("SESSION_NOT_FOUND");
+  if (input.sessionId && input.subjectId && sessionResult.data?.subject_id && sessionResult.data.subject_id !== input.subjectId) throw new Error("SESSION_SUBJECT_MISMATCH");
+  if (input.sessionId && sessionResult.data?.ended_at) throw new Error("SESSION_NOT_ACTIVE");
 
   const subjectRisk = subjectResult.data?.risk_level === "critical" ? 90 : subjectResult.data?.risk_level === "high" ? 70 : subjectResult.data?.risk_level === "medium" ? 40 : subjectResult.data?.risk_level === "low" ? 10 : 0;
   const deviceId = sessionResult.data?.device_id;
@@ -55,6 +57,11 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
 
   const signals: Signal[] = [];
   if (subjectRisk > 0) signals.push({ signalName: "subject_risk", source: "subject", score: subjectRisk, confidence: 1, evidence: { riskLevel: subjectResult.data?.risk_level } });
+  if (subjectResult.data?.status === "blocked" || subjectResult.data?.status === "deleted") {
+    signals.push({ signalName: "subject_status_block", source: "account_status", score: 100, confidence: 1, evidence: { status: subjectResult.data.status } });
+  } else if (subjectResult.data?.status === "suspended") {
+    signals.push({ signalName: "subject_status_suspended", source: "account_status", score: 80, confidence: 1, evidence: { status: subjectResult.data.status } });
+  }
   const deviceRisk = clamp(Number(deviceResult.data?.risk_score ?? 0));
   if (deviceRisk > 0) signals.push({ signalName: "device_risk", source: "device", score: deviceRisk, confidence: Number(deviceResult.data?.confidence ?? 0) || null, evidence: { deviceId } });
   const ip = ipResult.data;
