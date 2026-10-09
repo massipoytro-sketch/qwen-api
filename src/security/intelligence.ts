@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { supabase } from "../db/supabase";
 import { upsertGraphEdge } from "./graph";
+import { assertTenantScope } from "./scope";
 
 const deviceInputSchema = z.object({
   tenantId: z.uuid(),
@@ -46,6 +47,7 @@ const networkRiskScore = (input: z.infer<typeof networkInputSchema>) => Math.min
 
 export async function registerDevice(rawInput: z.input<typeof deviceInputSchema>) {
   const input = deviceInputSchema.parse(rawInput);
+  await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId });
   const stableKeyHash = hashStableKey(input.stableKey);
   const existing = await supabase.schema("security").from("devices").select("id,risk_score,confidence")
     .eq("tenant_id", input.tenantId).eq("stable_key", stableKeyHash).maybeSingle();
@@ -89,6 +91,7 @@ export async function registerDevice(rawInput: z.input<typeof deviceInputSchema>
 
 export async function registerIdentity(rawInput: z.input<typeof identityInputSchema>) {
   const input = identityInputSchema.parse(rawInput);
+  await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId });
   const result = await supabase.schema("security").from("identities").insert({
     tenant_id: input.tenantId, subject_id: input.subjectId, identity_type: input.identityType,
     value_hash: input.valueHash, normalized_domain: input.normalizedDomain ?? null,
@@ -104,6 +107,7 @@ export async function registerIdentity(rawInput: z.input<typeof identityInputSch
 
 export async function registerNetworkEvent(rawInput: z.input<typeof networkInputSchema>) {
   const input = networkInputSchema.parse(rawInput);
+  await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId });
   const ipResult = await supabase.schema("security").from("ip_addresses").upsert({
     ip: input.ip, country_code: input.countryCode ?? null, region: input.region ?? null, city: input.city ?? null,
     asn: input.asn ?? null, as_org: input.asOrg ?? null, is_proxy: input.isProxy, is_vpn: input.isVpn,
