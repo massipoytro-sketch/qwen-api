@@ -16,7 +16,7 @@ const resultSchema = z.object({
   count: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   remaining: z.number().int().nonnegative(),
-  resetAt: z.iso.datetime(),
+  resetAt: z.string().min(1).refine((value) => Number.isFinite(Date.parse(value)), "Invalid reset timestamp"),
   eventId: z.uuid().nullable(),
 });
 
