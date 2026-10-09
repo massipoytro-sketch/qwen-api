@@ -49,7 +49,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     input.sessionId ? supabase.schema("security").from("bot_events").select("observed_at,is_bot,confidence,signals").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("observed_at", new Date(Date.now() - 10 * 60_000).toISOString()).order("observed_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
     input.sessionId ? supabase.schema("security").from("behavior_events").select("anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
     input.subjectId ? supabase.schema("security").from("activity_anomalies").select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version,occurred_at").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
-    input.sessionId ? supabase.schema("security").from("behavior_events").select("occurred_at,event_type").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: true }).limit(200) : Promise.resolve({ data: [], error: null }),
+    input.sessionId ? supabase.schema("security").from("behavior_events").select("occurred_at,event_type,anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: true }).limit(200) : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult]) if (result.error) throw result.error;
 
@@ -143,6 +143,36 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   }
   if (input.subjectId && graphScoreInfo && graphScoreInfo.relatedSubjects.length >= 2) {
     backgroundTasks.push(upsertFraudCluster({ tenantId: input.tenantId, clusterType: "mixed", subjectIds: [input.subjectId, ...graphScoreInfo.relatedSubjects.map((subject) => subject.subjectId)], riskScore: graphScoreInfo.connectionScore, evidence: { relatedSubjectCount: graphScoreInfo.relatedSubjectCount, riskyConnectionCount: graphScoreInfo.riskyConnectionCount, version: "fraud-clusters-v1" } }));
+  }
+  const analyticsEventRows = (velocityResult.data ?? []).map((event) => ({
+    subjectId: input.subjectId,
+    sessionId: input.sessionId,
+    eventType: event.event_type,
+    occurredAt: event.occurred_at,
+    ...(event.anomaly_score === null || event.anomaly_score === undefined ? {} : { behaviorScore: clamp(Number(event.anomaly_score)) }),
+  }));
+  if (valueAnomaly && input.subjectId) {
+    const valueEvidence = valueAnomaly.evidence as Record<string, unknown>;
+    const valueDelta = Number(valueEvidence.delta);
+    if (Number.isFinite(valueDelta)) analyticsEventRows.push({
+      subjectId: input.subjectId,
+      sessionId: input.sessionId,
+      eventType: "value_change",
+      occurredAt: valueAnomaly.occurred_at,
+      valueDelta,
+      behaviorScore: 0,
+    });
+  }
+  if (env.DUCKDB_ANALYTICS_URL && env.DUCKDB_ANALYTICS_TOKEN && analyticsEventRows.length > 0) {
+    const minuteBucket = Math.floor(Date.now() / 60_000);
+    const bucketKey = input.sessionId ?? input.subjectId ?? assessmentInsert.data.id;
+    backgroundTasks.push(enqueueSecurityEvent({
+      tenantId: input.tenantId,
+      eventType: "analytics.duckdb_batch",
+      aggregateId: bucketKey,
+      dedupeKey: `duckdb:${bucketKey}:${minuteBucket}`,
+      payload: { tenantId: input.tenantId, events: analyticsEventRows.slice(-500) },
+    }));
   }
   const settled = await Promise.allSettled(backgroundTasks);
   for (const item of settled) if (item.status === "rejected") securityLog("security_background_task_failed", { requestId: input.requestId ?? null, tenantId: input.tenantId, errorCode: item.reason instanceof Error ? item.reason.name : "UNKNOWN_ERROR" });
