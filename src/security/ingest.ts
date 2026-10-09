@@ -2,7 +2,6 @@ import { isIP } from "node:net";
 import { z } from "zod";
 import { supabase } from "../db/supabase";
 import { registerNetworkEvent } from "./intelligence";
-import { scoreValueJump } from "./valueAnomaly";
 import { registerBotEvent, registerBehaviorEvent } from "./behavior";
 
 const base = z.object({
@@ -102,32 +101,11 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
       version: number;
       duplicate: boolean;
       baseline: boolean;
+      jumpScore: number;
+      anomalyId: string | null;
     };
     const delta = Number(data.delta);
-    const jumpScore = scoreValueJump(delta, data.baseline);
-    const absoluteJump = Math.abs(delta);
-
-    if (jumpScore > 0 && !data.duplicate) {
-      const anomaly = await supabase.schema("security").from("activity_anomalies").insert({
-        tenant_id: input.tenantId,
-        subject_id: input.subjectId,
-        session_id: input.sessionId ?? null,
-        anomaly_type: "value_jump",
-        score: jumpScore,
-        confidence: jumpScore >= 80 ? 0.9 : 0.75,
-        reason_codes: [absoluteJump >= 10000 ? "EXTREME_VALUE_JUMP" : "LARGE_VALUE_JUMP"],
-        evidence: {
-          valueType: payload.valueType,
-          previousValue: Number(data.previousValue),
-          currentValue: Number(data.currentValue),
-          delta,
-          stateVersion: data.version,
-        },
-        analyzer_version: "value-jump-v2",
-        occurred_at: new Date().toISOString(),
-      });
-      if (anomaly.error) throw anomaly.error;
-    }
+    const jumpScore = Number(data.jumpScore ?? 0);
 
     return {
       type: input.type,
