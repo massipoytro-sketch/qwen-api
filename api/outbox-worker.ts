@@ -134,6 +134,21 @@ const handlers: Record<string, (event: OutboxEvent) => Promise<void>> = {
   "security.behavior_event.created": async (event) => {
     securityLog("outbox_behavior_event_observed", { tenantId: event.tenant_id, eventId: event.id, behaviorEventId: event.aggregate_id });
   },
+  "security.ingestion.network": async (event) => {
+    securityLog("outbox_network_event_observed", { tenantId: event.tenant_id, eventId: event.id, networkEventId: event.aggregate_id });
+  },
+  "security.ingestion.bot": async (event) => {
+    securityLog("outbox_bot_event_observed", { tenantId: event.tenant_id, eventId: event.id, botEventId: event.aggregate_id });
+  },
+  "security.ingestion.behavior": async (event) => {
+    securityLog("outbox_behavior_event_observed", { tenantId: event.tenant_id, eventId: event.id, behaviorEventId: event.aggregate_id });
+  },
+  "security.ingestion.value": async (event) => {
+    securityLog("outbox_value_event_observed", { tenantId: event.tenant_id, eventId: event.id, valueEventId: event.aggregate_id });
+  },
+  "security.ingestion.security": async (event) => {
+    securityLog("outbox_security_event_observed", { tenantId: event.tenant_id, eventId: event.id, securityEventId: event.aggregate_id });
+  },
 };
 
 export default async function handler(request: Request) {
