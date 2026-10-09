@@ -579,6 +579,7 @@ export async function analyzeWithDuckDB(rawInput: {
     valueDelta?: number;
     botScore?: number;
     behaviorScore?: number;
+    valueEventId?: string;
   }>;
 }) {
   const endpoint = process.env.DUCKDB_ANALYTICS_URL;
@@ -596,6 +597,7 @@ export async function analyzeWithDuckDB(rawInput: {
       valueDelta: z.number().finite().optional(),
       botScore: z.number().min(0).max(100).optional(),
       behaviorScore: z.number().min(0).max(100).optional(),
+      valueEventId: z.uuid().optional(),
     })).max(500),
   }).parse(rawInput);
   const safePayload = {
