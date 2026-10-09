@@ -2,10 +2,10 @@
 
 ## What is already implemented
 
-- 20 private security tables under `security`.
-- RLS enabled on all 20 tables.
+- 23 private security tables under `security`.
+- RLS enabled on all 23 tables.
 - `anon` and `authenticated` have no schema usage for the private security schema.
-- Device, identity, network, bot, behavior, session, rate-limit and abuse pipelines.
+- Device, identity, network, bot, behavior, session, rate-limit and abuse pipelines.\n- Server-authoritative value state with idempotency and atomic anomaly persistence.\n- Concurrency-safe database-backed rate limiting.\n- Freshness windows for bot, behavior and value anomaly evidence.\n- Request parsing hardening, 64 KiB body cap, safe error output, security headers, and opt-in CORS.
 - Deterministic weighted risk engine.
 - Graph correlation and graph-derived risk evidence.
 - AI advisory analysis with model versioning and prediction storage.
@@ -21,7 +21,7 @@ Create these production environment variables in the API host:
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVER_KEY`
-- `SECURITY_API_CORS_ORIGIN`
+- `SECURITY_API_CORS_ORIGIN` (optional; leave unset unless a specific browser origin needs access)
 
 Never put `SUPABASE_SERVER_KEY` in browser/client code.
 
@@ -82,13 +82,13 @@ The security API must still return a deterministic decision. AI is advisory only
 ### 8. Database verification
 Confirm:
 
-- all 20 security tables remain RLS-enabled;
+- all 23 security tables remain RLS-enabled;
 - no `anon`/public access is granted to internal security tables;
 - tenant API keys are stored as hashes only;
 - audit events are being created for security checks.
 
 ## Current known limitation
 
-The repository contains the production API baseline, but deployment, tenant provisioning, live API smoke tests, centralized telemetry, and external security testing still require the owner to perform them.
+The repository contains a hardened API baseline, but the production deployment, tenant provisioning, end-to-end database transaction tests with test fixtures, live API smoke tests, centralized telemetry, and external security testing still remain pending.
 
 This is not a security certification. Production readiness requires testing in the actual deployment environment.
