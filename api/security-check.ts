@@ -14,7 +14,7 @@ const bodySchema = z.object({
 });
 
 const json = (body: unknown, status = 200, requestId?: string) => new Response(
-  JSON.stringify(body),
+  status === 204 ? null : JSON.stringify(body),
   {
     status,
     headers: {
