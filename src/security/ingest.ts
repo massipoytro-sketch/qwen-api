@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 import { supabase } from "../db/supabase";
 import { registerNetworkEvent } from "./intelligence";
@@ -14,7 +15,7 @@ const eventSchema = base.extend({
 });
 
 const networkPayload = z.object({
-  ip: z.ip(),
+  ip: z.string().refine((value) => isIP(value) !== 0, "Invalid IP address"),
   eventType: z.string().min(1).max(100).optional(),
   reputationScore: z.number().min(0).max(100).optional(),
   countryCode: z.string().length(2).optional(),
