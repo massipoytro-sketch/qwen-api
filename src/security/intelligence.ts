@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { supabase } from "../db/supabase";
@@ -27,7 +28,7 @@ const identityInputSchema = z.object({
 });
 
 const networkInputSchema = z.object({
-  tenantId: z.uuid(), ip: z.ip(), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(),
+  tenantId: z.uuid(), ip: z.string().refine((value) => isIP(value) !== 0, "Invalid IP address"), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(),
   eventType: z.string().min(1).max(100).default("request"), reputationScore: z.number().min(0).max(100).optional(),
   countryCode: z.string().length(2).optional(), region: z.string().max(100).optional(), city: z.string().max(100).optional(),
   asn: z.number().int().positive().optional(), asOrg: z.string().max(255).optional(),
