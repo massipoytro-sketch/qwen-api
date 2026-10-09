@@ -95,7 +95,7 @@ export default async function handler(request: Request) {
     if (!limit.allowed) {
       return json({
         error: "RATE_LIMITED",
-        retryAfter: Math.max(1, Math.ceil((new Date(limit.resetAt).getTime() - Date.now()) / 1000)),
+        retryAfter: Math.max(1, Math.ceil((new Date(limit.resetAt ?? new Date(Date.now() + 60_000).toISOString()).getTime() - Date.now()) / 1000)),
         requestId,
       }, 429, requestId);
     }
