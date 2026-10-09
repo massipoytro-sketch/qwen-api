@@ -32,7 +32,7 @@ export async function registerBotEvent(rawInput: z.input<typeof botEventSchema>)
     tenant_id: input.tenantId,
     session_id: input.sessionId ?? null,
     subject_id: input.subjectId ?? null,
-    bot_type: input.botType,
+    detection_method: input.botType,
     confidence: input.confidence,
     is_bot: input.isBot,
     signals: input.signals,
