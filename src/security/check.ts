@@ -43,17 +43,12 @@ type Signal = {
 
 const aggregateRisk = (signals: Signal[]) => {
   if (!signals.length) return 0;
-
-  // Weighted evidence: strong independent signals reinforce each other,
-  // while repeated evidence from one source is naturally bounded.
   const weighted = signals.reduce(
     (total, signal) => total + signal.score * (signal.confidence ?? 0.5),
     0,
   );
-
   const sourceBonus = Math.min(15, Math.max(0, new Set(signals.map((s) => s.source)).size - 1) * 5);
   const highSignalBonus = signals.filter((s) => s.score >= 70).length >= 2 ? 10 : 0;
-
   return clamp(Math.round(Math.min(100, weighted * 0.55 + sourceBonus + highSignalBonus)));
 };
 
@@ -90,7 +85,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   const deviceId = sessionResult.data?.device_id;
   const ipId = sessionResult.data?.ip_id;
 
-  const [deviceResult, ipResult, botResult, behaviorResult] = await Promise.all([
+  const [deviceResult, ipResult, botResult, behaviorResult, anomalyResult] = await Promise.all([
     deviceId
       ? supabase.schema("security").from("devices").select("id,risk_score,confidence")
           .eq("tenant_id", input.tenantId).eq("id", deviceId).maybeSingle()
@@ -110,78 +105,78 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
           .eq("tenant_id", input.tenantId).eq("session_id", input.sessionId)
           .order("occurred_at", { ascending: false }).limit(1).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
+    input.subjectId
+      ? supabase.schema("security").from("activity_anomalies")
+          .select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version")
+          .eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId)
+          .order("occurred_at", { ascending: false }).limit(1).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
-  for (const result of [deviceResult, ipResult, botResult, behaviorResult]) {
+  for (const result of [deviceResult, ipResult, botResult, behaviorResult, anomalyResult]) {
     if (result.error) throw result.error;
   }
 
   const signals: Signal[] = [];
 
   if (subjectRisk > 0) {
-    signals.push({
-      signalName: "subject_risk", source: "subject", score: subjectRisk, confidence: 1,
-      evidence: { riskLevel: subjectResult.data?.risk_level },
-    });
+    signals.push({ signalName: "subject_risk", source: "subject", score: subjectRisk, confidence: 1,
+      evidence: { riskLevel: subjectResult.data?.risk_level } });
   }
 
   const deviceRisk = clamp(Number(deviceResult.data?.risk_score ?? 0));
   if (deviceRisk > 0) {
-    signals.push({
-      signalName: "device_risk", source: "device", score: deviceRisk,
-      confidence: Number(deviceResult.data?.confidence ?? 0) || null, evidence: { deviceId },
-    });
+    signals.push({ signalName: "device_risk", source: "device", score: deviceRisk,
+      confidence: Number(deviceResult.data?.confidence ?? 0) || null, evidence: { deviceId } });
   }
 
   const ip = ipResult.data;
   if (ip) {
     const reputationPenalty = ip.reputation_score == null ? 0 : Math.max(0, 50 - Number(ip.reputation_score)) * 0.2;
-    const networkPenalty = clamp(
-      (ip.is_tor ? 35 : 0) + (ip.is_proxy ? 20 : 0) +
-      (ip.is_vpn ? 15 : 0) + (ip.is_datacenter ? 20 : 0) + reputationPenalty,
-    );
-
+    const networkPenalty = clamp((ip.is_tor ? 35 : 0) + (ip.is_proxy ? 20 : 0) +
+      (ip.is_vpn ? 15 : 0) + (ip.is_datacenter ? 20 : 0) + reputationPenalty);
     if (networkPenalty > 0) {
-      signals.push({
-        signalName: "network_risk", source: "network", score: networkPenalty, confidence: 0.9,
-        evidence: {
-          isTor: ip.is_tor, isProxy: ip.is_proxy, isVpn: ip.is_vpn,
-          isDatacenter: ip.is_datacenter, reputationScore: ip.reputation_score,
-        },
-      });
+      signals.push({ signalName: "network_risk", source: "network", score: networkPenalty, confidence: 0.9,
+        evidence: { isTor: ip.is_tor, isProxy: ip.is_proxy, isVpn: ip.is_vpn,
+          isDatacenter: ip.is_datacenter, reputationScore: ip.reputation_score } });
     }
   }
 
   const bot = botResult.data;
   if (bot?.is_bot) {
     const botScore = clamp(Number(bot.confidence ?? 1) * 100);
-    signals.push({
-      signalName: "bot_detection", source: "bot_detection", score: botScore,
-      confidence: Number(bot.confidence ?? 1), evidence: { isBot: true },
-    });
+    signals.push({ signalName: "bot_detection", source: "bot_detection", score: botScore,
+      confidence: Number(bot.confidence ?? 1), evidence: { isBot: true } });
   }
 
   const anomalyScore = clamp(Number(behaviorResult.data?.anomaly_score ?? 0));
   if (anomalyScore > 0) {
+    signals.push({ signalName: "behavior_anomaly", source: "behavior", score: anomalyScore,
+      confidence: 0.8, evidence: { anomalyScore } });
+  }
+
+  const valueAnomaly = anomalyResult.data;
+  if (valueAnomaly && Number(valueAnomaly.score) > 0) {
     signals.push({
-      signalName: "behavior_anomaly", source: "behavior", score: anomalyScore,
-      confidence: 0.8, evidence: { anomalyScore },
+      signalName: "value_jump_anomaly",
+      source: "activity_anomaly",
+      score: clamp(Number(valueAnomaly.score)),
+      confidence: Number(valueAnomaly.confidence ?? 0.75),
+      evidence: {
+        anomalyType: valueAnomaly.anomaly_type,
+        reasonCodes: valueAnomaly.reason_codes,
+        evidence: valueAnomaly.evidence,
+        analyzerVersion: valueAnomaly.analyzer_version,
+      },
     });
   }
 
   if (input.subjectId) {
     const graphScore = await scoreSubjectConnections({ tenantId: input.tenantId, subjectId: input.subjectId });
     if (graphScore.connectionScore > 0) {
-      signals.push({
-        signalName: "graph_connection_risk",
-        source: "graph",
-        score: graphScore.connectionScore,
-        confidence: 0.8,
-        evidence: {
-          riskyConnectionCount: graphScore.riskyConnectionCount,
-          relatedSubjectCount: graphScore.relatedSubjectCount,
-        },
-      });
+      signals.push({ signalName: "graph_connection_risk", source: "graph", score: graphScore.connectionScore,
+        confidence: 0.8, evidence: { riskyConnectionCount: graphScore.riskyConnectionCount,
+          relatedSubjectCount: graphScore.relatedSubjectCount } });
     }
   }
 
@@ -189,91 +184,50 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
 
   if (env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL) {
     try {
-      const ai = await analyzeWithAI({
-        tenantId: input.tenantId,
-        subjectId: input.subjectId,
-        sessionId: input.sessionId,
-        endpoint: env.AI_ANALYZER_ENDPOINT,
-        apiKey: env.AI_ANALYZER_API_KEY,
-        model: env.AI_ANALYZER_MODEL,
-        evidence: {
-          deterministicScore,
-          signals,
-        },
-      });
-      signals.push({
-        signalName: "ai_advisory",
-        source: "ai",
-        score: ai.riskScore,
-        confidence: Math.min(0.5, ai.confidence * 0.5),
-        evidence: {
-          riskLevel: ai.riskLevel,
-          reasonCodes: ai.reasonCodes,
-          recommendedAction: ai.recommendedAction,
-          predictionId: ai.predictionId,
-        },
-      });
+      const ai = await analyzeWithAI({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId,
+        endpoint: env.AI_ANALYZER_ENDPOINT, apiKey: env.AI_ANALYZER_API_KEY, model: env.AI_ANALYZER_MODEL,
+        evidence: { deterministicScore, signals } });
+      signals.push({ signalName: "ai_advisory", source: "ai", score: ai.riskScore,
+        confidence: Math.min(0.5, ai.confidence * 0.5), evidence: { riskLevel: ai.riskLevel,
+          reasonCodes: ai.reasonCodes, recommendedAction: ai.recommendedAction, predictionId: ai.predictionId } });
     } catch (error) {
-      securityLog("ai_advisory_failed", {
-        requestId: input.requestId ?? null,
-        tenantId: input.tenantId,
-        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
-      });
+      securityLog("ai_advisory_failed", { requestId: input.requestId ?? null, tenantId: input.tenantId,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR" });
     }
   }
 
   const score = aggregateRisk(signals);
   const riskLevel = riskLevelFor(score);
   const decision = decisionFor(score);
-  securityLog("security_check", { requestId: input.requestId ?? null, tenantId: input.tenantId, subjectId: input.subjectId ?? null, score, decision, signalCount: signals.length });
+  securityLog("security_check", { requestId: input.requestId ?? null, tenantId: input.tenantId,
+    subjectId: input.subjectId ?? null, score, decision, signalCount: signals.length });
 
   const assessmentInsert = await supabase.schema("security").from("risk_assessments").insert({
-    tenant_id: input.tenantId,
-    subject_id: input.subjectId ?? null,
-    session_id: input.sessionId ?? null,
-    score,
-    risk_level: riskLevel,
-    assessment_version: "baseline-v2",
-    explanation: {
-      requestId: input.requestId ?? null,
-      signalCount: signals.length,
-      sources: signals.map((signal) => signal.source),
-      aggregation: "weighted_evidence_v2",
-    },
+    tenant_id: input.tenantId, subject_id: input.subjectId ?? null, session_id: input.sessionId ?? null,
+    score, risk_level: riskLevel, assessment_version: "baseline-v2",
+    explanation: { requestId: input.requestId ?? null, signalCount: signals.length,
+      sources: signals.map((signal) => signal.source), aggregation: "weighted_evidence_v2" },
   }).select("id").single();
-
   if (assessmentInsert.error) throw assessmentInsert.error;
 
   if (signals.length > 0) {
     const signalInsert = await supabase.schema("security").from("risk_signals").insert(
-      signals.map((signal) => ({
-        assessment_id: assessmentInsert.data.id,
-        signal_name: signal.signalName,
-        source: signal.source,
-        score: signal.score,
-        confidence: signal.confidence,
-        evidence: signal.evidence,
-      })),
+      signals.map((signal) => ({ assessment_id: assessmentInsert.data.id, signal_name: signal.signalName,
+        source: signal.source, score: signal.score, confidence: signal.confidence, evidence: signal.evidence })),
     );
     if (signalInsert.error) throw signalInsert.error;
   }
 
   const decisionInsert = await supabase.schema("security").from("risk_decisions").insert({
-    assessment_id: assessmentInsert.data.id,
-    decision,
-    reason_codes: signals.map((signal) => signal.signalName),
+    assessment_id: assessmentInsert.data.id, decision, reason_codes: signals.map((signal) => signal.signalName),
     decision_version: "baseline-v2",
   });
   if (decisionInsert.error) throw decisionInsert.error;
 
   if (input.requestId) {
     const auditInsert = await supabase.schema("security").from("audit_events").insert({
-      tenant_id: input.tenantId,
-      actor_type: "system",
-      action: "security_check",
-      resource_type: "risk_assessment",
-      resource_id: assessmentInsert.data.id,
-      request_id: input.requestId,
+      tenant_id: input.tenantId, actor_type: "system", action: "security_check", resource_type: "risk_assessment",
+      resource_id: assessmentInsert.data.id, request_id: input.requestId,
       details: { decision, score, riskLevel, version: "baseline-v2" },
     });
     if (auditInsert.error) throw auditInsert.error;
