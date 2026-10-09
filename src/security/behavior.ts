@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { supabase } from "../db/supabase";
+import { assertTenantScope } from "./scope";
 
 const botEventSchema = z.object({
   tenantId: z.uuid(),
@@ -27,6 +28,7 @@ const botRiskScore = (confidence: number, isBot: boolean) =>
 
 export async function registerBotEvent(rawInput: z.input<typeof botEventSchema>) {
   const input = botEventSchema.parse(rawInput);
+  await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId });
 
   const result = await supabase.schema("security").from("bot_events").insert({
     tenant_id: input.tenantId,
@@ -52,6 +54,7 @@ export async function registerBehaviorEvent(
   rawInput: z.input<typeof behaviorEventSchema>,
 ) {
   const input = behaviorEventSchema.parse(rawInput);
+  await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId });
 
   const result = await supabase.schema("security").from("behavior_events").insert({
     tenant_id: input.tenantId,
