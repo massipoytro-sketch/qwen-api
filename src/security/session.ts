@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { supabase } from "../db/supabase";
 import { hashValue } from "./utils";
+import { assertTenantScope } from "./scope";
 
 const sessionInputSchema = z.object({
   tenantId: z.uuid(),
@@ -19,6 +20,7 @@ export async function registerSession(
   if (!input.deviceId && !input.ipId && !input.subjectId) {
     throw new Error("SESSION_CONTEXT_REQUIRED");
   }
+  await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, deviceId: input.deviceId, ipId: input.ipId });
 
   const result = await supabase.schema("security").from("sessions").insert({
     tenant_id: input.tenantId,
