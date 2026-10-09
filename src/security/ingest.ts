@@ -9,7 +9,7 @@ const base = z.object({
   sessionId: z.uuid().optional(),
 });
 const eventSchema = base.extend({
-  type: z.enum(["network","bot","behavior","security"]),
+  type: z.enum(["network", "bot", "behavior", "value", "security"]),
   payload: z.record(z.string(), z.unknown()),
 });
 
@@ -44,6 +44,15 @@ const behaviorPayload = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
+const valuePayload = z.object({
+  valueType: z.string().min(1).max(100),
+  previousValue: z.number().finite(),
+  currentValue: z.number().finite(),
+  source: z.string().min(1).max(100).default("system"),
+  occurredAt: z.iso.datetime().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
 export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>) {
   const input = eventSchema.parse(rawInput);
 
@@ -66,6 +75,51 @@ export async function ingestSecurityEvent(rawInput: z.input<typeof eventSchema>)
     return { type: input.type, result: await registerBehaviorEvent({
       tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId, ...payload,
     }) };
+  }
+
+  if (input.type === "value") {
+    if (!input.subjectId) throw new Error("VALUE_EVENT_SUBJECT_REQUIRED");
+    const payload = valuePayload.parse(input.payload);
+    const result = await supabase.schema("security").from("value_events").insert({
+      tenant_id: input.tenantId,
+      subject_id: input.subjectId,
+      session_id: input.sessionId ?? null,
+      value_type: payload.valueType,
+      previous_value: payload.previousValue,
+      current_value: payload.currentValue,
+      source: payload.source,
+      occurred_at: payload.occurredAt ?? new Date().toISOString(),
+      metadata: payload.metadata ?? {},
+    }).select("id,delta_value").single();
+
+    if (result.error) throw result.error;
+
+    const delta = Number(result.data.delta_value);
+    const absoluteJump = Math.abs(delta);
+    const jumpScore = absoluteJump >= 10000 ? 100 : absoluteJump >= 1000 ? 80 : absoluteJump >= 500 ? 50 : 0;
+
+    if (jumpScore > 0) {
+      const anomaly = await supabase.schema("security").from("activity_anomalies").insert({
+        tenant_id: input.tenantId,
+        subject_id: input.subjectId,
+        session_id: input.sessionId ?? null,
+        anomaly_type: "value_jump",
+        score: jumpScore,
+        confidence: jumpScore >= 80 ? 0.9 : 0.75,
+        reason_codes: [absoluteJump >= 10000 ? "EXTREME_VALUE_JUMP" : "LARGE_VALUE_JUMP"],
+        evidence: {
+          valueType: payload.valueType,
+          previousValue: payload.previousValue,
+          currentValue: payload.currentValue,
+          delta,
+        },
+        analyzer_version: "value-jump-v1",
+        occurred_at: payload.occurredAt ?? new Date().toISOString(),
+      });
+      if (anomaly.error) throw anomaly.error;
+    }
+
+    return { type: input.type, result: { valueEventId: result.data.id, delta, jumpScore } };
   }
 
   const result = await supabase.schema("security").from("security_events").insert({
