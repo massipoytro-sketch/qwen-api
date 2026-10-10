@@ -63,7 +63,7 @@ The script stores only a SHA-256 hash in `security.tenants.api_key_hash`, then p
 
 ## Deploy order
 
-1. Deploy the TypeScript API from `main` with the dedicated security Supabase environment.
+1. Deploy the TypeScript API from `main` with the dedicated security Supabase environment. On Railway, the repository now includes `server.ts` as a bounded Node HTTP adapter; set the start command to `pnpm start` and the healthcheck path to `/api/health`.
 2. Run `/api/health` and confirm it reports `gainiren-security`.
 3. Provision a tenant with the script above; save the tenant ID and API key securely.
 4. Deploy `analytics/duckdb-worker/Dockerfile` as an isolated private web service with `DUCKDB_ANALYTICS_TOKEN`. Confirm `/health` first, then set `DUCKDB_ANALYTICS_URL` to its HTTPS `/analyze` URL and the same token in the API.
