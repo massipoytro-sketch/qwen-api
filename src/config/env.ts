@@ -10,6 +10,8 @@ const envSchema = z.object({
   OUTBOX_WORKER_TOKEN: z.string().min(32).optional(),
   DUCKDB_ANALYTICS_URL: z.url().optional(),
   DUCKDB_ANALYTICS_TOKEN: z.string().min(32).optional(),
+  HONEY_SENSOR_TOKEN: z.string().min(32).optional(),
+  HONEY_TENANT_ID: z.uuid().optional(),
 }).superRefine((value, ctx) => {
   const configured = [
     value.AI_ANALYZER_ENDPOINT,
@@ -28,6 +30,10 @@ const envSchema = z.object({
   if (duckDbConfigured !== 0 && duckDbConfigured !== 2) {
     ctx.addIssue({ code: "custom", path: ["DUCKDB_ANALYTICS_URL"], message: "DuckDB worker URL and token must be configured together" });
   }
+  const honeyConfigured = [value.HONEY_SENSOR_TOKEN, value.HONEY_TENANT_ID].filter(Boolean).length;
+  if (honeyConfigured !== 0 && honeyConfigured !== 2) {
+    ctx.addIssue({ code: "custom", path: ["HONEY_SENSOR_TOKEN"], message: "Honey sensor token and dedicated tenant ID must be configured together" });
+  }
 });
 
 export const env = envSchema.parse({
@@ -40,4 +46,6 @@ export const env = envSchema.parse({
   OUTBOX_WORKER_TOKEN: process.env.OUTBOX_WORKER_TOKEN,
   DUCKDB_ANALYTICS_URL: process.env.DUCKDB_ANALYTICS_URL,
   DUCKDB_ANALYTICS_TOKEN: process.env.DUCKDB_ANALYTICS_TOKEN,
+  HONEY_SENSOR_TOKEN: process.env.HONEY_SENSOR_TOKEN,
+  HONEY_TENANT_ID: process.env.HONEY_TENANT_ID,
 });
