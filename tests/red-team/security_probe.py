@@ -13,20 +13,62 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 ACK = "I_OWN_THIS_SERVICE"
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 TENANT_ID = os.environ.get("TENANT_ID", "")
 API_KEY = os.environ.get("API_KEY", "")
 WRONG_TENANT_ID = os.environ.get("WRONG_TENANT_ID", "00000000-0000-0000-0000-000000000000")
+ALLOWED_TARGET_ORIGIN = os.environ.get("ALLOWED_TARGET_ORIGIN", "").rstrip("/")
+
+
+class NoRedirect(HTTPRedirectHandler):
+    """Never forward the tenant API key through an HTTP redirect."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+SAFE_OPENER = build_opener(NoRedirect)
+
+
+def validate_target(base_url: str, allowed_origin: str) -> None:
+    if not base_url or not allowed_origin:
+        raise ValueError("BASE_URL and ALLOWED_TARGET_ORIGIN are required")
+    try:
+        target = urlsplit(base_url)
+        allowed = urlsplit(allowed_origin)
+        target_port = target.port
+        allowed_port = allowed.port
+    except ValueError as exc:
+        raise ValueError("Target URL is invalid") from exc
+    if target.username or target.password or allowed.username or allowed.password:
+        raise ValueError("Credentials are not allowed in target URLs")
+    if target.query or target.fragment or target.path not in ("", "/"):
+        raise ValueError("BASE_URL must be an origin only; query, fragment, and paths are forbidden")
+    if allowed.path not in ("", "/") or allowed.query or allowed.fragment:
+        raise ValueError("ALLOWED_TARGET_ORIGIN must be an origin only")
+    local = target.hostname in ("localhost", "127.0.0.1", "::1")
+    if target.scheme != "https" and not (local and target.scheme == "http"):
+        raise ValueError("Target must use HTTPS (HTTP is allowed only for local development)")
+    if allowed.scheme != "https" and not (
+        allowed.hostname in ("localhost", "127.0.0.1", "::1") and allowed.scheme == "http"
+    ):
+        raise ValueError("Allowed target origin must use HTTPS except for local development")
+    target_origin = (target.scheme.lower(), (target.hostname or "").lower(), target_port)
+    allowed_origin_tuple = (allowed.scheme.lower(), (allowed.hostname or "").lower(), allowed_port)
+    if target_origin != allowed_origin_tuple:
+        raise ValueError("BASE_URL origin does not exactly match ALLOWED_TARGET_ORIGIN")
 
 
 def require_config() -> None:
     if os.environ.get("SECURITY_TEST_ACK") != ACK:
         raise SystemExit("Refusing to run: SECURITY_TEST_ACK must be I_OWN_THIS_SERVICE")
-    if not BASE_URL.startswith("https://") and "localhost" not in BASE_URL and "127.0.0.1" not in BASE_URL:
-        raise SystemExit("BASE_URL must use HTTPS (localhost is allowed for local testing)")
+    try:
+        validate_target(BASE_URL, ALLOWED_TARGET_ORIGIN)
+    except ValueError as exc:
+        raise SystemExit(f"Refusing target: {exc}") from exc
     if not TENANT_ID or not API_KEY:
         raise SystemExit("TENANT_ID and API_KEY are required")
 
@@ -37,7 +79,7 @@ def request(path: str, body: str | None, headers: dict[str, str] | None = None) 
     for key, value in (headers or {}).items():
         req.add_header(key, value)
     try:
-        with urlopen(req, timeout=10) as response:
+        with SAFE_OPENER.open(req, timeout=10) as response:
             raw = response.read(200_000).decode("utf-8", "replace")
             try:
                 parsed = json.loads(raw) if raw else {}

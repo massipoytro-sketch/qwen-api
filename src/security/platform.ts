@@ -211,6 +211,14 @@ const quantile = (sorted: number[], percentile: number) => {
 
 export async function refreshBehavioralBaseline(rawInput: { tenantId: string; subjectId: string }) {
   const input = z.object({ tenantId: z.uuid(), subjectId: z.uuid() }).parse(rawInput);
+  const scopedSubject = await supabase.schema("security").from("subjects")
+    .select("id")
+    .eq("tenant_id", input.tenantId)
+    .eq("id", input.subjectId)
+    .maybeSingle();
+  if (scopedSubject.error) throw scopedSubject.error;
+  if (!scopedSubject.data) throw new Error("SUBJECT_NOT_FOUND");
+
   const since = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString();
   const events = await supabase.schema("security").from("behavior_events")
     .select("anomaly_score")
@@ -293,6 +301,14 @@ export async function upsertFraudCluster(rawInput: {
   }).parse(rawInput);
   const subjectIds = [...new Set(input.subjectIds)].sort();
   if (subjectIds.length < 2) throw new Error("FRAUD_CLUSTER_REQUIRES_MULTIPLE_SUBJECTS");
+  const scopedSubjects = await supabase.schema("security").from("subjects")
+    .select("id")
+    .eq("tenant_id", input.tenantId)
+    .in("id", subjectIds);
+  if (scopedSubjects.error) throw scopedSubjects.error;
+  if ((scopedSubjects.data ?? []).length !== subjectIds.length) {
+    throw new Error("SUBJECT_NOT_FOUND");
+  }
   const clusterKey = hashValue(`${input.clusterType}:${subjectIds.join(":")}`);
   const result = await supabase.schema("security").from("fraud_clusters").upsert({
     tenant_id: input.tenantId,
@@ -322,6 +338,14 @@ export async function ensureInvestigationCase(rawInput: {
     decision: z.enum(["ALLOW", "MONITOR", "CHALLENGE", "REVIEW", "BLOCK"]),
     evidence: z.record(z.string(), z.unknown()).default({}),
   }).parse(rawInput);
+  const scopedSubject = await supabase.schema("security").from("subjects")
+    .select("id")
+    .eq("tenant_id", input.tenantId)
+    .eq("id", input.subjectId)
+    .maybeSingle();
+  if (scopedSubject.error) throw scopedSubject.error;
+  if (!scopedSubject.data) throw new Error("SUBJECT_NOT_FOUND");
+
   const severity = input.score >= 90 ? "critical" : input.score >= 70 ? "high" : "medium";
   const details = {
     source: "automated-risk-review",
@@ -622,7 +646,35 @@ export async function analyzeWithDuckDB(rawInput: {
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`DUCKDB_ANALYTICS_HTTP_${response.status}`);
-    return await response.json() as Record<string, unknown>;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("DUCKDB_EMPTY_RESPONSE");
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        totalBytes += part.value.byteLength;
+        if (totalBytes > 1_048_576) {
+          await reader.cancel();
+          throw new Error("DUCKDB_RESPONSE_TOO_LARGE");
+        }
+        chunks.push(part.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const merged = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(merged)) as Record<string, unknown>;
+    } catch {
+      throw new Error("DUCKDB_INVALID_JSON");
+    }
   } finally {
     clearTimeout(timer);
   }

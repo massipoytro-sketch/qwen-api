@@ -25,7 +25,7 @@ const analyticsResponseSchema = z.object({
   version: z.string(),
   batchSize: z.number().int().nonnegative(),
   anomalyCount: z.number().int().nonnegative(),
-  processedAt: z.string(),
+  processedAt: z.string().datetime(),
   anomalies: z.array(z.object({
     type: z.string().min(1).max(100),
     tenantHash: z.string().length(64),
@@ -61,6 +61,13 @@ async function handleDuckDbBatch(event: OutboxEvent) {
   try {
     const rawResult = await analyzeWithDuckDB(payload);
     const analysis = analyticsResponseSchema.parse(rawResult);
+    if (analysis.batchSize !== payload.events.length || analysis.anomalyCount !== analysis.anomalies.length) {
+      throw new Error("DUCKDB_RESPONSE_COUNT_MISMATCH");
+    }
+    const expectedTenantHash = hashValue(payload.tenantId);
+    if (analysis.anomalies.some((anomaly) => anomaly.tenantHash !== expectedTenantHash)) {
+      throw new Error("DUCKDB_TENANT_HASH_MISMATCH");
+    }
     const subjectLookup = new Map<string, string>();
     const sessionLookup = new Map<string, string>();
     for (const row of payload.events) {
@@ -72,7 +79,10 @@ async function handleDuckDbBatch(event: OutboxEvent) {
     for (const anomaly of analysis.anomalies) {
       const subjectId = anomaly.subjectHash ? subjectLookup.get(anomaly.subjectHash) : undefined;
       const sessionId = anomaly.sessionHash ? sessionLookup.get(anomaly.sessionHash) : undefined;
+      if (anomaly.subjectHash && !subjectId) continue;
+      if (anomaly.sessionHash && !sessionId) continue;
       if (!subjectId) continue; // Findings without a mapped subject remain in aggregate analytics only.
+      if (sessionId && !payload.events.some((row) => row.subjectId === subjectId && row.sessionId === sessionId)) continue;
       if (anomaly.type === "value_jump") {
         const sourceEvent = payload.events.find((row) => row.valueEventId && row.subjectId === subjectId && row.valueDelta !== undefined && Number(row.valueDelta) === Number(anomaly.evidence.delta));
         if (sourceEvent?.valueEventId) {
