@@ -1,0 +1,55 @@
+name: Security Red Team
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Owned GainiRen security API base URL"
+        required: true
+        type: string
+      acknowledge_authorization:
+        description: "Type I_OWN_THIS_SERVICE to authorize the bounded probe"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: ${{ inputs.acknowledge_authorization == 'I_OWN_THIS_SERVICE' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate target
+        env:
+          TARGET_URL: ${{ inputs.target_url }}
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
+          url = os.environ["TARGET_URL"]
+          parsed = urlparse(url)
+          if parsed.scheme != "https":
+              raise SystemExit("Target must use HTTPS")
+          if not parsed.netloc:
+              raise SystemExit("Invalid target URL")
+          print("Target accepted:", parsed.scheme + "://" + parsed.netloc)
+          PY
+
+      - name: Run bounded security probe
+        env:
+          BASE_URL: ${{ inputs.target_url }}
+          TENANT_ID: ${{ secrets.GAINIREN_SECURITY_TENANT_ID }}
+          API_KEY: ${{ secrets.GAINIREN_SECURITY_API_KEY }}
+          WRONG_TENANT_ID: ${{ secrets.GAINIREN_SECURITY_WRONG_TENANT_ID }}
+          SECURITY_TEST_ACK: ${{ inputs.acknowledge_authorization }}
+        run: python tests/red-team/security_probe.py
