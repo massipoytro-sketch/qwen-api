@@ -3,10 +3,6 @@ name: Security Red Team
 on:
   workflow_dispatch:
     inputs:
-      target_url:
-        description: "Owned GainiRen security API base URL"
-        required: true
-        type: string
       acknowledge_authorization:
         description: "Type I_OWN_THIS_SERVICE to authorize the bounded probe"
         required: true
@@ -22,32 +18,34 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
-      - name: Validate target
+      - name: Validate configured target
         env:
-          TARGET_URL: ${{ inputs.target_url }}
+          TARGET_URL: ${{ secrets.GAINIREN_SECURITY_ALLOWED_TARGET_ORIGIN }}
         run: |
           python - <<'PY'
           import os
-          from urllib.parse import urlparse
-          url = os.environ["TARGET_URL"]
-          parsed = urlparse(url)
-          if parsed.scheme != "https":
-              raise SystemExit("Target must use HTTPS")
-          if not parsed.netloc:
-              raise SystemExit("Invalid target URL")
-          print("Target accepted:", parsed.scheme + "://" + parsed.netloc)
+          import sys
+          sys.path.insert(0, "tests/red-team")
+          from security_probe import validate_target
+          target = os.environ.get("TARGET_URL", "")
+          try:
+              validate_target(target, target)
+          except ValueError as exc:
+              raise SystemExit(f"Configured target rejected: {exc}") from exc
+          print("Configured owned-service target passed origin validation.")
           PY
 
       - name: Run bounded security probe
         env:
-          BASE_URL: ${{ inputs.target_url }}
+          BASE_URL: ${{ secrets.GAINIREN_SECURITY_ALLOWED_TARGET_ORIGIN }}
+          ALLOWED_TARGET_ORIGIN: ${{ secrets.GAINIREN_SECURITY_ALLOWED_TARGET_ORIGIN }}
           TENANT_ID: ${{ secrets.GAINIREN_SECURITY_TENANT_ID }}
           API_KEY: ${{ secrets.GAINIREN_SECURITY_API_KEY }}
           WRONG_TENANT_ID: ${{ secrets.GAINIREN_SECURITY_WRONG_TENANT_ID }}
