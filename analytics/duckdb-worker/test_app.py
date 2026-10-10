@@ -2,7 +2,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 
-os.environ["DUCKDB_ANALYTICS_TOKEN"] = "test-worker-secret-123"
+os.environ["DUCKDB_ANALYTICS_TOKEN"] = "test-worker-secret-12345678901234567890"
 
 from app import app  # noqa: E402
 
@@ -15,7 +15,7 @@ class DuckDbWorkerTests(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
 
-    def post_events(self, events, token="test-worker-secret-123"):
+    def post_events(self, events, token="test-worker-secret-12345678901234567890"):
         return self.client.post(
             "/analyze",
             json={"tenantHash": TENANT, "events": events},
@@ -45,7 +45,7 @@ class DuckDbWorkerTests(unittest.TestCase):
         invalid = self.client.post(
             "/analyze",
             json={"tenantHash": "not-a-hash", "events": []},
-            headers={"Authorization": "Bearer test-worker-secret-123"},
+            headers={"Authorization": "Bearer test-worker-secret-12345678901234567890"},
         )
         self.assertEqual(invalid.status_code, 400)
         oversized = self.post_events([self.event() for _ in range(501)])
@@ -78,7 +78,7 @@ class DuckDbWorkerTests(unittest.TestCase):
         response = self.client.post(
             "/analyze",
             json={"tenantHash": TENANT, "events": [{"eventType": "x"}]},
-            headers={"Authorization": "Bearer test-worker-secret-123"},
+            headers={"Authorization": "Bearer test-worker-secret-12345678901234567890"},
         )
         self.assertEqual(response.status_code, 400)
 
