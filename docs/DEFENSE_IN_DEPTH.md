@@ -21,7 +21,9 @@ An attacker should have to defeat independent controls rather than a single wall
 
 ## Deception / decoy database
 
-A decoy database (HoneyDB) can be useful as an intrusion-detection trap, but it must never be a second copy of the real production database.
+The repository now includes a separately deployable HoneyDB sensor at `deception/honeydb`. It exposes synthetic-only decoy endpoints and sends metadata-only hit events to `/api/internal/honey-alert` through an independent token. It has no Supabase server key and makes no database connection. See `docs/HONEYDB.md` for the runtime settings and deployment boundary.
+
+A decoy service can be useful as an intrusion-detection trap, but it must never be a second copy of the real production database.
 
 Rules:
 
