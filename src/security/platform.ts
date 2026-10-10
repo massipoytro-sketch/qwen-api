@@ -646,7 +646,35 @@ export async function analyzeWithDuckDB(rawInput: {
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`DUCKDB_ANALYTICS_HTTP_${response.status}`);
-    return await response.json() as Record<string, unknown>;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("DUCKDB_EMPTY_RESPONSE");
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        totalBytes += part.value.byteLength;
+        if (totalBytes > 1_048_576) {
+          await reader.cancel();
+          throw new Error("DUCKDB_RESPONSE_TOO_LARGE");
+        }
+        chunks.push(part.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const merged = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(merged)) as Record<string, unknown>;
+    } catch {
+      throw new Error("DUCKDB_INVALID_JSON");
+    }
   } finally {
     clearTimeout(timer);
   }
