@@ -5,7 +5,6 @@ import hmac
 import json
 import os
 import queue
-import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -157,7 +156,7 @@ def record_probe() -> Response | None:
     remote = request.remote_addr or "unknown"
     user_agent = request.headers.get("User-Agent", "")[:512]
     event = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "service": "gainiren-honeydb",
         "event": "honeytrap_probe" if surface != "unknown" else "unknown_path_probe",
         "requestId": request_id,
