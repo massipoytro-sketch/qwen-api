@@ -1,0 +1,75 @@
+name: Security Runtime Smoke
+
+on:
+  push:
+    branches: ["main", "hardening/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  http-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.12.1
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Start and test HTTP runtime
+        env:
+          SUPABASE_URL: https://ci-placeholder.supabase.co
+          SUPABASE_SERVER_KEY: ci-placeholder-not-a-real-secret
+          PORT: "3210"
+          NODE_ENV: test
+        run: |
+          set -eu
+          pnpm start > /tmp/gainiren-security-runtime.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --silent --show-error --fail http://127.0.0.1:3210/api/health > /tmp/gainiren-health.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          grep -q '"service":"gainiren-security"' /tmp/gainiren-health.json
+          grep -q '"status":"ok"' /tmp/gainiren-health.json
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' \
+            --data '{"tenantId":"00000000-0000-0000-0000-000000000000"}' \
+            http://127.0.0.1:3210/api/security-check)
+          test "$code" = "401"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' --data '{}' \
+            http://127.0.0.1:3210/api/security-event)
+          test "$code" = "401"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' --data '{}' \
+            http://127.0.0.1:3210/api/outbox-worker)
+          test "$code" = "503"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            http://127.0.0.1:3210/not-a-route)
+          test "$code" = "404"
