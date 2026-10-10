@@ -159,6 +159,9 @@ const handlers: Record<string, (event: OutboxEvent) => Promise<void>> = {
   "security.ingestion.security": async (event) => {
     securityLog("outbox_security_event_observed", { tenantId: event.tenant_id, eventId: event.id, securityEventId: event.aggregate_id });
   },
+  "security.honeytrap.hit": async (event) => {
+    securityLog("outbox_honeytrap_hit_observed", { tenantId: event.tenant_id, eventId: event.id, securityEventId: event.aggregate_id });
+  },
 };
 
 export default async function handler(request: Request) {
