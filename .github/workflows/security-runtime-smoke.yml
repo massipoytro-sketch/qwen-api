@@ -73,3 +73,8 @@ jobs:
           code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             http://127.0.0.1:3210/not-a-route)
           test "$code" = "404"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' --data '{}' \
+            http://127.0.0.1:3210/api/internal/honey-alert)
+          test "$code" = "404"
