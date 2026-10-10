@@ -67,3 +67,6 @@ jobs:
         env:
           DUCKDB_ANALYTICS_TOKEN: test-worker-secret-12345678901234567890
         run: python -m unittest discover -s . -p 'test_*.py' -v
+
+      - name: Test red-team target safety
+        run: python -m unittest discover -s ../../tests/red-team -p 'test_*.py' -v
