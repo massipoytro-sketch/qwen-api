@@ -36,7 +36,7 @@ def safe_number(value, low=None, high=None):
 def authorized():
     expected = os.environ.get("DUCKDB_ANALYTICS_TOKEN", "")
     supplied = request.headers.get("Authorization", "")
-    if not expected or not supplied.startswith("Bearer "):
+    if len(expected) < 32 or not supplied.startswith("Bearer "):
         return False
     return hmac.compare_digest(supplied[7:], expected)
 
@@ -165,6 +165,11 @@ def analyze():
 @app.errorhandler(413)
 def too_large(_error):
     return jsonify({"error": "PAYLOAD_TOO_LARGE"}), 413
+
+@app.errorhandler(500)
+def internal_error(_error):
+    # Never expose exception details, database internals, or credentials in HTTP responses.
+    return jsonify({"error": "INTERNAL_ERROR"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
