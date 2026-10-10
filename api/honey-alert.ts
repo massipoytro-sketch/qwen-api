@@ -9,7 +9,7 @@ import { securityLog } from "../src/security/observability";
 const requestSchema = z.object({
   requestId: z.uuid(),
   surface: z.enum(["admin", "environment", "backup", "debug", "api_probe", "unknown"]),
-  method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+  method: z.string().min(1).max(12).regex(/^[A-Z]+$/),
   pathCategory: z.string().min(1).max(80),
   peerHash: z.string().regex(/^[a-f0-9]{64}$/),
   userAgentHash: z.string().regex(/^[a-f0-9]{64}$/),
