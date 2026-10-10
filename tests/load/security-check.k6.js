@@ -6,7 +6,7 @@ const tenantId = __ENV.TENANT_ID || "";
 const apiKey = __ENV.API_KEY || "";
 const ack = __ENV.LOAD_TEST_ACK || "";
 const profile = __ENV.LOAD_PROFILE || "smoke";
-const allowedOrigin = (__ENV.ALLOWED_TARGET_ORIGIN || "").replace(/\\/+$/, "");
+const allowedOrigin = (__ENV.ALLOWED_TARGET_ORIGIN || "").replace(/\/+$/, "");
 
 if (!baseUrl || !tenantId || !apiKey || !allowedOrigin) {
   throw new Error("Set BASE_URL, ALLOWED_TARGET_ORIGIN, TENANT_ID, and API_KEY before starting the test.");
@@ -23,7 +23,7 @@ try {
 if (target.username || target.password || target.search || target.hash || !["", "/"].includes(target.pathname)) {
   throw new Error("BASE_URL must be an origin only, without credentials, path, query, or fragment.");
 }
-const origin = target.origin.replace(/\\/+$/, "");
+const origin = target.origin.replace(/\/+$/, "");
 if (origin !== allowedOrigin) {
   throw new Error("BASE_URL origin must exactly match ALLOWED_TARGET_ORIGIN.");
 }
