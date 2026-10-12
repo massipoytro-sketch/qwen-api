@@ -44,7 +44,22 @@ async function enqueueIngested(input: {
 const networkPayload = z.object({
   ip: z.string().refine((value) => isIP(value) !== 0, "Invalid IP address"),
   eventType: z.string().min(1).max(100).optional(),
-}).strict();
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  geoSource: z.enum(["trusted_geoip", "tenant_server"]).optional(),
+}).strict().superRefine((input, context) => {
+  const hasLatitude = input.latitude !== undefined;
+  const hasLongitude = input.longitude !== undefined;
+  if (hasLatitude !== hasLongitude) {
+    context.addIssue({ code: "custom", message: "Latitude and longitude must be supplied together", path: ["latitude"] });
+  }
+  if ((hasLatitude || hasLongitude) && !input.geoSource) {
+    context.addIssue({ code: "custom", message: "Location source is required for coordinates", path: ["geoSource"] });
+  }
+  if (input.geoSource && !(hasLatitude && hasLongitude)) {
+    context.addIssue({ code: "custom", message: "Location source requires coordinates", path: ["geoSource"] });
+  }
+});
 
 const botPayload = z.object({
   botType: z.string().min(1).max(100).optional(),
