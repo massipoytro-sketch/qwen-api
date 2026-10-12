@@ -8,16 +8,40 @@ type SafeDetails = Record<string, unknown>;
  */
 export function safeErrorCode(error: unknown): string {
   const object = error && typeof error === "object"
-    ? error as { code?: unknown; name?: unknown }
+    ? error as { code?: unknown; name?: unknown; message?: unknown }
     : undefined;
-  const candidate = typeof object?.code === "string"
-    ? object.code
+
+  if (typeof object?.code === "string" && object.code.trim()) {
+    return object.code.replace(/[^A-Za-z0-9_:-]/g, "").slice(0, 80) || "UNKNOWN_ERROR";
+  }
+
+  // Supabase/PostgREST may return a structured error without a code (for
+  // example when the Data API rejects the schema/profile before RPC lookup).
+  // Classify messages, but never log raw provider or database text.
+  const message = typeof object?.message === "string"
+    ? object.message.toLowerCase()
     : error instanceof Error
-      ? error.name
-      : typeof object?.name === "string"
-        ? object.name
-        : "UNKNOWN_ERROR";
-  return candidate.replace(/[^A-Za-z0-9_:-]/g, "").slice(0, 80) || "UNKNOWN_ERROR";
+      ? error.message.toLowerCase()
+      : typeof error === "string"
+        ? error.toLowerCase()
+        : "";
+
+  const postgrestCode = /\bPGRST\d{3}\b/i.exec(message)?.[0]?.toUpperCase();
+  if (postgrestCode) return postgrestCode;
+  if (/invalid api key|api key.*invalid/.test(message)) return "SUPABASE_API_KEY_REJECTED";
+  if (/jwt|token.*expired|signature verification/.test(message)) return "SUPABASE_AUTH_REJECTED";
+  if (/schema.*(not exposed|not in the list|must be one of)/.test(message)) return "SUPABASE_SCHEMA_NOT_EXPOSED";
+  if (/could not find the function|function.*not.*schema cache/.test(message)) return "SUPABASE_RPC_NOT_FOUND";
+  if (/permission denied|not authorized|insufficient privilege/.test(message)) return "SUPABASE_PERMISSION_DENIED";
+  if (/fetch failed|network|timed out|timeout|econnreset|enotfound/.test(message)) return "SUPABASE_NETWORK_ERROR";
+  if (error instanceof Error && error.name && error.name !== "Error") {
+    return error.name.replace(/[^A-Za-z0-9_:-]/g, "").slice(0, 80) || "UNKNOWN_ERROR";
+  }
+  if (message) return "SUPABASE_RESPONSE_ERROR";
+  if (typeof object?.name === "string") {
+    return object.name.replace(/[^A-Za-z0-9_:-]/g, "").slice(0, 80) || "UNKNOWN_ERROR";
+  }
+  return "UNKNOWN_ERROR";
 }
 
 export function safeErrorStatus(error: unknown): number | undefined {
