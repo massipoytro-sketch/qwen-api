@@ -1,6 +1,8 @@
 name: Security API Smoke Bot
 
 on:
+  push:
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       base_url:
@@ -15,8 +17,11 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
+      - name: Allow production deployment to settle
+        if: github.event_name == 'push'
+        run: sleep 60
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Run safe smoke checks
