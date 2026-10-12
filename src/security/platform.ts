@@ -2,7 +2,7 @@ import { z } from "zod";
 import { supabase } from "../db/supabase";
 import { hashValue } from "./utils";
 import { analyzeVelocity, type TimedEvent } from "./velocity";
-import { securityLog } from "./observability";
+import { safeErrorCode, safeErrorStatus, securityLog } from "./observability";
 
 const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 
@@ -569,7 +569,13 @@ export async function processSecurityOutboxBatch(
         if (done.data !== true) throw new Error("OUTBOX_LEASE_LOST");
         return "completed" as const;
       } catch (error) {
-        const code = error instanceof Error ? error.name.replace(/[^A-Za-z0-9_:-]/g, "").slice(0, 80) || "WORKER_ERROR" : "WORKER_ERROR";
+        const code = safeErrorCode(error);
+        securityLog("outbox_event_handler_failed", {
+          eventId: event.id,
+          eventType: event.event_type,
+          errorCode: code,
+          ...(safeErrorStatus(error) ? { errorStatus: safeErrorStatus(error) } : {}),
+        });
         const failed = await supabase.schema("security").rpc("fail_security_event_outbox", {
           p_event_id: event.id,
           p_lease_token: event.lease_token,
@@ -577,7 +583,11 @@ export async function processSecurityOutboxBatch(
           p_max_attempts: 8,
         });
         if (failed.error) {
-          securityLog("outbox_retry_failed", { eventId: event.id, errorCode: failed.error.code ?? "DB_ERROR" });
+          securityLog("outbox_retry_failed", {
+            eventId: event.id,
+            errorCode: safeErrorCode(failed.error),
+            ...(safeErrorStatus(failed.error) ? { errorStatus: safeErrorStatus(failed.error) } : {}),
+          });
           return "retry_error" as const;
         }
         if (failed.data !== true) return "lease_lost" as const;

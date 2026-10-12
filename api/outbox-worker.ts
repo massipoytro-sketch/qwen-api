@@ -4,7 +4,7 @@ import { env } from "../src/config/env";
 import { supabase } from "../src/db/supabase";
 import { analyzeWithDuckDB, processSecurityOutboxBatch, saveAnalyticsRun, type OutboxEvent } from "../src/security/platform";
 import { hashValue } from "../src/security/utils";
-import { securityLog } from "../src/security/observability";
+import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
 
 const requestSchema = z.object({ batchSize: z.number().int().min(1).max(100).default(25) }).strict();
 const analyticsPayloadSchema = z.object({
@@ -184,7 +184,10 @@ export default async function handler(request: Request) {
     const result = await processSecurityOutboxBatch(handlers, parsed.batchSize);
     return json({ service: "gainiren-security-worker", status: "ok", ...result });
   } catch (error) {
-    securityLog("outbox_worker_failed", { errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR" });
+    securityLog("outbox_worker_failed", {
+      errorCode: safeErrorCode(error),
+      ...(safeErrorStatus(error) ? { errorStatus: safeErrorStatus(error) } : {}),
+    });
     return json({ error: "WORKER_FAILED" }, 500);
   }
 }
