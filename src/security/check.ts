@@ -5,6 +5,7 @@ import { scoreSubjectConnections } from "./graph";
 import { analyzeWithAI, buildAIAdvisoryEvidence } from "./ai";
 import { safeErrorCode, safeErrorStatus, securityLog } from "./observability";
 import { analyzeVelocity } from "./velocity";
+import { analyzeAccountTakeoverSignals, analyzeConcurrentSessionAnomalies } from "./detectors";
 import { analyzeAdvancedBotSignals, evaluateTenantPolicies, getBehaviorBaselineScore, ensureInvestigationCase, enqueueSecurityEvent, upsertFraudCluster } from "./platform";
 import type { SecurityCheckInput, SecurityCheckResult, SecurityDecision } from "./types";
 
@@ -45,17 +46,40 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   const deviceId = sessionResult.data?.device_id;
   const ipId = sessionResult.data?.ip_id;
 
-  const [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult] = await Promise.all([
+  const [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult, accountEventsResult, subjectSessionsResult] = await Promise.all([
     deviceId ? supabase.schema("security").from("devices").select("id,risk_score,confidence").eq("tenant_id", input.tenantId).eq("id", deviceId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     ipId ? supabase.schema("security").from("ip_addresses").select("id,reputation_score,is_proxy,is_vpn,is_tor,is_datacenter").eq("id", ipId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     input.sessionId ? supabase.schema("security").from("bot_events").select("observed_at,is_bot,confidence,signals").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("observed_at", new Date(Date.now() - 10 * 60_000).toISOString()).order("observed_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
     input.sessionId ? supabase.schema("security").from("behavior_events").select("anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null, error: null }),
     input.subjectId ? supabase.schema("security").from("activity_anomalies").select("id,anomaly_type,score,confidence,reason_codes,evidence,analyzer_version,occurred_at,source_event_id").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(20) : Promise.resolve({ data: [], error: null }),
     input.sessionId ? supabase.schema("security").from("behavior_events").select("occurred_at,event_type,anomaly_score").eq("tenant_id", input.tenantId).eq("session_id", input.sessionId).gte("occurred_at", new Date(Date.now() - 15 * 60_000).toISOString()).order("occurred_at", { ascending: true }).limit(200) : Promise.resolve({ data: [], error: null }),
+    input.subjectId ? supabase.schema("security").from("security_events").select("event_type,severity,occurred_at").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("occurred_at", new Date(Date.now() - 24 * 60 * 60_000).toISOString()).order("occurred_at", { ascending: false }).limit(200) : Promise.resolve({ data: [], error: null }),
+    input.subjectId ? supabase.schema("security").from("sessions").select("device_id,ip_id,started_at,ended_at").eq("tenant_id", input.tenantId).eq("subject_id", input.subjectId).gte("started_at", new Date(Date.now() - 24 * 60 * 60_000).toISOString()).order("started_at", { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
   ]);
-  for (const result of [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult]) if (result.error) throw result.error;
+  for (const result of [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult, accountEventsResult, subjectSessionsResult]) if (result.error) throw result.error;
 
   const signals: Signal[] = [];
+  const accountTakeover = analyzeAccountTakeoverSignals((accountEventsResult.data ?? []).map((event) => ({
+    eventType: event.event_type,
+    occurredAt: event.occurred_at,
+    severity: event.severity,
+  })));
+  if (accountTakeover.score > 0) signals.push({
+    signalName: "account_takeover_detection", source: "account_security",
+    score: accountTakeover.score, confidence: accountTakeover.confidence,
+    evidence: { reasonCodes: accountTakeover.reasonCodes, failedLoginCount5m: accountTakeover.failedLoginCount5m, sensitiveEventCount1h: accountTakeover.sensitiveEventCount1h, version: accountTakeover.version },
+  });
+  const concurrentSessions = analyzeConcurrentSessionAnomalies((subjectSessionsResult.data ?? []).map((session) => ({
+    deviceId: session.device_id,
+    ipId: session.ip_id,
+    startedAt: session.started_at,
+    endedAt: session.ended_at,
+  })));
+  if (concurrentSessions.score > 0) signals.push({
+    signalName: "concurrent_session_anomaly", source: "session_integrity",
+    score: concurrentSessions.score, confidence: concurrentSessions.confidence,
+    evidence: { reasonCodes: concurrentSessions.reasonCodes, activeSessionCount: concurrentSessions.activeSessionCount, distinctDeviceCount: concurrentSessions.distinctDeviceCount, distinctIpCount: concurrentSessions.distinctIpCount, version: concurrentSessions.version },
+  });
   if (subjectRisk > 0) signals.push({ signalName: "subject_risk", source: "subject", score: subjectRisk, confidence: 1, evidence: { riskLevel: subjectResult.data?.risk_level } });
   if (subjectResult.data?.status === "blocked" || subjectResult.data?.status === "deleted") {
     signals.push({ signalName: "subject_status_block", source: "account_status", score: 100, confidence: 1, evidence: { status: subjectResult.data.status } });
@@ -112,6 +136,8 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
       signals.push({ signalName: "analytics_bot_anomaly", source: "duckdb_analytics", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.7), evidence });
     } else if (anomaly.anomaly_type === "behavioral_deviation") {
       signals.push({ signalName: "analytics_behavior_anomaly", source: "duckdb_analytics", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.7), evidence });
+    } else if (anomaly.anomaly_type === "impossible_travel") {
+      signals.push({ signalName: "impossible_travel_detection", source: "network_intelligence", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.82), evidence });
     } else {
       signals.push({ signalName: "analytics_anomaly", source: "duckdb_analytics", score: anomalyScore, confidence: Number(anomaly.confidence ?? 0.5), evidence });
     }
