@@ -26,5 +26,5 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Run safe smoke checks
         env:
-          SECURITY_API_BASE_URL: ${{ inputs.base_url }}
+          SECURITY_API_BASE_URL: ${{ inputs.base_url || 'https://gainiren-security-api.onrender.com' }}
         run: node scripts/security-smoke-bot.mjs
