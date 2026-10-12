@@ -91,7 +91,9 @@ export function evaluatePolicySet(context: SecurityPolicyContext, policies: Secu
     if (!allMatches || !anyMatches) continue;
 
     matched.push({ id: policy.id, name: policy.name, reasonCode: policy.reason_code });
-    scoreDelta = Number.isFinite(policy.score_delta) ? policy.score_delta : 0;
+    // Risk policies may increase a deterministic score, but must not lower it.
+    // Down-scoring should require an explicit, separately audited trust mechanism.
+    scoreDelta = Number.isFinite(policy.score_delta) ? Math.max(0, policy.score_delta) : 0;
     decisionOverride = policy.decision;
 
     // Only one policy is applied: the first match in priority order is deterministic and auditable.
@@ -147,7 +149,8 @@ export function analyzeAdvancedBotSignals(input: {
   let detectorConfidence = 0;
 
   for (const event of recentBotEvents) {
-    const confidence = Math.max(0, Math.min(1, Number(event.confidence ?? 0)));
+    const rawConfidence = Number(event.confidence ?? 0);
+    const confidence = Number.isFinite(rawConfidence) ? Math.max(0, Math.min(1, rawConfidence)) : 0;
     if (event.isBot) explicitBotScore = Math.max(explicitBotScore, confidence * 100);
     detectorConfidence = Math.max(detectorConfidence, confidence);
     for (const key of botSignalKeys) if (event.signals?.[key] === true) recentSignals.add(key);
@@ -184,7 +187,15 @@ export type BehaviorBaseline = {
 };
 
 export function scoreBehaviorAgainstBaseline(currentValue: number, baseline: BehaviorBaseline | null) {
-  if (!Number.isFinite(currentValue) || !baseline || baseline.sample_count < 20) {
+  if (
+    !Number.isFinite(currentValue) ||
+    !baseline ||
+    !Number.isFinite(baseline.sample_count) ||
+    baseline.sample_count < 20 ||
+    !Number.isFinite(baseline.mean_value) ||
+    !Number.isFinite(baseline.stddev_value) ||
+    (baseline.p95_value !== null && !Number.isFinite(baseline.p95_value))
+  ) {
     return { score: 0, confidence: 0.35, zScore: 0, baselineReady: false, version: "baseline-v1" };
   }
   const standardDeviation = Math.max(1, baseline.stddev_value);

@@ -12,6 +12,78 @@ const aiInputSchema = z.object({
   timeoutMs: z.number().int().min(500).max(30000).default(8000),
 });
 
+export function validateAIEndpoint(rawEndpoint: string, production = process.env.NODE_ENV === "production"): URL {
+  const endpoint = new URL(rawEndpoint);
+  if (endpoint.username || endpoint.password) throw new Error("AI_ANALYZER_ENDPOINT_CREDENTIALS_FORBIDDEN");
+  if (endpoint.protocol !== "https:" && (production || endpoint.protocol !== "http:")) {
+    throw new Error("AI_ANALYZER_HTTPS_REQUIRED");
+  }
+  if (!endpoint.hostname) throw new Error("AI_ANALYZER_ENDPOINT_INVALID");
+  return endpoint;
+}
+
+export function buildAIAdvisoryEvidence(input: {
+  deterministicScore: number;
+  signals: Array<{
+    signalName: string;
+    source: string;
+    score: number;
+    confidence: number | null;
+  }>;
+}) {
+  const clamp = (value: number, max: number) => Math.max(0, Math.min(max, value));
+  return {
+    schemaVersion: "security_evidence_v1",
+    deterministicScore: Number.isFinite(input.deterministicScore)
+      ? clamp(input.deterministicScore, 100)
+      : 0,
+    signalCount: input.signals.length,
+    signals: input.signals.slice(0, 64).map((signal) => ({
+      signalName: signal.signalName.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 100),
+      source: signal.source.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 80),
+      score: Number.isFinite(signal.score) ? clamp(signal.score, 100) : 0,
+      confidence: signal.confidence !== null && Number.isFinite(signal.confidence)
+        ? clamp(signal.confidence, 1)
+        : null,
+    })),
+  };
+}
+
+export async function readBoundedResponseText(response: Response, maxBytes = 1_048_576): Promise<string> {
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) throw new Error("AI_ANALYZER_RESPONSE_LIMIT_INVALID");
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("AI_ANALYZER_EMPTY_RESPONSE");
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      totalBytes += part.value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        throw new Error("AI_ANALYZER_RESPONSE_TOO_LARGE");
+      }
+      chunks.push(part.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(merged);
+  } catch {
+    throw new Error("AI_ANALYZER_INVALID_UTF8");
+  }
+}
+
 const aiOutputSchema = z.object({
   riskScore: z.number().min(0).max(100),
   riskLevel: z.enum(["unknown","low","medium","high","critical"]),
@@ -27,8 +99,10 @@ export async function analyzeWithAI(rawInput: z.input<typeof aiInputSchema>) {
   const timer = setTimeout(() => controller.abort(), input.timeoutMs);
 
   try {
-    const response = await fetch(input.endpoint, {
+    const endpoint = validateAIEndpoint(input.endpoint);
+    const response = await fetch(endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${input.apiKey}`,
@@ -50,9 +124,15 @@ export async function analyzeWithAI(rawInput: z.input<typeof aiInputSchema>) {
 
     if (!response.ok) throw new Error(`AI_ANALYZER_HTTP_${response.status}`);
 
-    const payload = await response.json() as {
+    const responseText = await readBoundedResponseText(response);
+    let payload: {
       choices?: Array<{ message?: { content?: string } }>;
     };
+    try {
+      payload = JSON.parse(responseText) as typeof payload;
+    } catch {
+      throw new Error("AI_ANALYZER_INVALID_JSON");
+    }
     const content = payload.choices?.[0]?.message?.content;
     if (!content) throw new Error("AI_ANALYZER_EMPTY_RESPONSE");
 
