@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { supabase } from "../db/supabase";
 import { upsertGraphEdge } from "./graph";
 import { assertTenantScope } from "./scope";
+import { analyzeImpossibleTravel } from "./detectors";
+import { safeErrorCode, safeErrorStatus, securityLog } from "./observability";
 
 const deviceInputSchema = z.object({
   tenantId: z.uuid(),
@@ -32,9 +34,24 @@ const networkInputSchema = z.object({
   tenantId: z.uuid(), ip: z.string().refine((value) => isIP(value) !== 0, "Invalid IP address"), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(),
   eventType: z.string().min(1).max(100).default("request"), reputationScore: z.number().min(0).max(100).optional(),
   countryCode: z.string().length(2).optional(), region: z.string().max(100).optional(), city: z.string().max(100).optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  geoSource: z.enum(["trusted_geoip", "tenant_server"]).optional(),
   asn: z.number().int().positive().optional(), asOrg: z.string().max(255).optional(),
   isProxy: z.boolean().optional(), isVpn: z.boolean().optional(), isTor: z.boolean().optional(),
   isDatacenter: z.boolean().optional(), metadata: z.record(z.string(), z.unknown()).optional(),
+}).superRefine((input, context) => {
+  const hasLatitude = input.latitude !== undefined;
+  const hasLongitude = input.longitude !== undefined;
+  if (hasLatitude !== hasLongitude) {
+    context.addIssue({ code: "custom", message: "Latitude and longitude must be supplied together", path: ["latitude"] });
+  }
+  if ((hasLatitude || hasLongitude) && !input.geoSource) {
+    context.addIssue({ code: "custom", message: "Location source is required for coordinates", path: ["geoSource"] });
+  }
+  if (input.geoSource && !(hasLatitude && hasLongitude)) {
+    context.addIssue({ code: "custom", message: "Location source requires coordinates", path: ["geoSource"] });
+  }
 });
 
 const hashStableKey = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -108,8 +125,9 @@ export async function registerIdentity(rawInput: z.input<typeof identityInputSch
 export async function registerNetworkEvent(rawInput: z.input<typeof networkInputSchema>) {
   const input = networkInputSchema.parse(rawInput);
   await assertTenantScope({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId });
+  const observedAt = new Date().toISOString();
   const existingIp = await supabase.schema("security").from("ip_addresses")
-    .select("id,country_code,region,city,asn,as_org,is_proxy,is_vpn,is_tor,is_datacenter,reputation_score,metadata")
+    .select("id,country_code,region,city,asn,as_org,is_proxy,is_vpn,is_tor,is_datacenter,reputation_score,metadata,latitude,longitude,location_source")
     .eq("ip", input.ip).maybeSingle();
   if (existingIp.error) throw existingIp.error;
   const existingMetadata = existingIp.data?.metadata && typeof existingIp.data.metadata === "object" && !Array.isArray(existingIp.data.metadata)
@@ -127,17 +145,127 @@ export async function registerNetworkEvent(rawInput: z.input<typeof networkInput
     is_tor: input.isTor ?? existingIp.data?.is_tor ?? false,
     is_datacenter: input.isDatacenter ?? existingIp.data?.is_datacenter ?? false,
     reputation_score: input.reputationScore ?? existingIp.data?.reputation_score ?? null,
-    last_seen_at: new Date().toISOString(),
+    latitude: input.latitude ?? existingIp.data?.latitude ?? null,
+    longitude: input.longitude ?? existingIp.data?.longitude ?? null,
+    location_source: input.geoSource ?? existingIp.data?.location_source ?? null,
+    last_seen_at: observedAt,
     metadata: { ...existingMetadata, ...(input.metadata ?? {}) },
-  }, { onConflict: "ip" }).select("id").single();
+  }, { onConflict: "ip" }).select("id,latitude,longitude,country_code,location_source").single();
   if (ipResult.error) throw ipResult.error;
+
+  let impossibleTravel: ReturnType<typeof analyzeImpossibleTravel> | null = null;
+  const currentLatitude = Number(ipResult.data.latitude);
+  const currentLongitude = Number(ipResult.data.longitude);
+  if (
+    input.subjectId &&
+    Number.isFinite(currentLatitude) &&
+    Number.isFinite(currentLongitude) &&
+    (ipResult.data.location_source === "trusted_geoip" || ipResult.data.location_source === "tenant_server")
+  ) {
+    try {
+      const currentTime = Date.parse(observedAt);
+      const previousEvents = await supabase.schema("security").from("network_events")
+        .select("ip_id,observed_at")
+        .eq("tenant_id", input.tenantId)
+        .eq("subject_id", input.subjectId)
+        .neq("ip_id", ipResult.data.id)
+        .gte("observed_at", new Date(currentTime - 24 * 60 * 60_000).toISOString())
+        .lt("observed_at", observedAt)
+        .order("observed_at", { ascending: false })
+        .limit(25);
+      if (previousEvents.error) throw previousEvents.error;
+
+      const previousIpIds = [...new Set((previousEvents.data ?? []).map((event) => event.ip_id))];
+      if (previousIpIds.length > 0) {
+        const previousIps = await supabase.schema("security").from("ip_addresses")
+          .select("id,latitude,longitude,country_code,location_source")
+          .in("id", previousIpIds);
+        if (previousIps.error) throw previousIps.error;
+        const locationsById = new Map((previousIps.data ?? []).map((location) => [location.id, location]));
+        const previousEvent = (previousEvents.data ?? []).find((event) => {
+          const location = locationsById.get(event.ip_id);
+          return location &&
+            Number.isFinite(Number(location.latitude)) &&
+            Number.isFinite(Number(location.longitude)) &&
+            (location.location_source === "trusted_geoip" || location.location_source === "tenant_server");
+        });
+        if (previousEvent) {
+          const previousLocation = locationsById.get(previousEvent.ip_id);
+          if (previousLocation) {
+            impossibleTravel = analyzeImpossibleTravel({
+              latitude: Number(previousLocation.latitude),
+              longitude: Number(previousLocation.longitude),
+              occurredAt: previousEvent.observed_at,
+              countryCode: previousLocation.country_code,
+              source: previousLocation.location_source,
+            }, {
+              latitude: currentLatitude,
+              longitude: currentLongitude,
+              occurredAt: observedAt,
+              countryCode: ipResult.data.country_code,
+              source: ipResult.data.location_source,
+            }, currentTime);
+          }
+        }
+      }
+    } catch (error) {
+      securityLog("impossible_travel_analysis_failed", {
+        tenantId: input.tenantId,
+        subjectId: input.subjectId,
+        errorCode: safeErrorCode(error),
+        ...(safeErrorStatus(error) ? { errorStatus: safeErrorStatus(error) } : {}),
+      });
+    }
+  }
 
   const eventResult = await supabase.schema("security").from("network_events").insert({
     tenant_id: input.tenantId, subject_id: input.subjectId ?? null, session_id: input.sessionId ?? null,
     ip_id: ipResult.data.id, event_type: input.eventType, risk_score: networkRiskScore(input),
+    observed_at: observedAt,
     metadata: input.metadata ?? {},
   }).select("id,risk_score").single();
   if (eventResult.error) throw eventResult.error;
+
+  if (impossibleTravel && impossibleTravel.score >= 60 && input.subjectId) {
+    const hourBucket = Math.floor(Date.parse(observedAt) / 3_600_000);
+    const dedupeKey = `impossible-travel:${input.subjectId}:${ipResult.data.id}:${hourBucket}`;
+    const anomaly = await supabase.schema("security").from("activity_anomalies").upsert({
+      tenant_id: input.tenantId,
+      subject_id: input.subjectId,
+      session_id: input.sessionId ?? null,
+      anomaly_type: "impossible_travel",
+      score: impossibleTravel.score,
+      confidence: impossibleTravel.confidence,
+      reason_codes: impossibleTravel.reasonCodes,
+      evidence: {
+        distanceKm: impossibleTravel.distanceKm,
+        speedKmh: impossibleTravel.speedKmh,
+        elapsedMinutes: impossibleTravel.elapsedMinutes,
+        previousCountryCode: undefined,
+        currentCountryCode: ipResult.data.country_code ?? null,
+      },
+      analyzer_version: impossibleTravel.version,
+      occurred_at: observedAt,
+      dedupe_key: dedupeKey,
+    }, { onConflict: "tenant_id,dedupe_key" }).select("id").single();
+    if (anomaly.error) {
+      securityLog("impossible_travel_persist_failed", {
+        tenantId: input.tenantId,
+        subjectId: input.subjectId,
+        eventId: eventResult.data.id,
+        errorCode: safeErrorCode(anomaly.error),
+        ...(safeErrorStatus(anomaly.error) ? { errorStatus: safeErrorStatus(anomaly.error) } : {}),
+      });
+    } else {
+      securityLog("impossible_travel_detected", {
+        tenantId: input.tenantId,
+        subjectId: input.subjectId,
+        eventId: eventResult.data.id,
+        score: impossibleTravel.score,
+        reasonCodes: impossibleTravel.reasonCodes,
+      });
+    }
+  }
 
   if (input.subjectId) {
     await upsertGraphEdge({ tenantId: input.tenantId, leftType: "subject", leftId: input.subjectId,
@@ -147,5 +275,16 @@ export async function registerNetworkEvent(rawInput: z.input<typeof networkInput
     await upsertGraphEdge({ tenantId: input.tenantId, leftType: "session", leftId: input.sessionId,
       relationship: "uses_ip", rightType: "ip", rightId: ipResult.data.id, confidence: 1 });
   }
-  return { ipId: ipResult.data.id, eventId: eventResult.data.id, riskScore: eventResult.data.risk_score };
+  return {
+    ipId: ipResult.data.id,
+    eventId: eventResult.data.id,
+    riskScore: eventResult.data.risk_score,
+    impossibleTravel: impossibleTravel && impossibleTravel.score >= 60 ? {
+      score: impossibleTravel.score,
+      reasonCodes: impossibleTravel.reasonCodes,
+      distanceKm: impossibleTravel.distanceKm,
+      speedKmh: impossibleTravel.speedKmh,
+      elapsedMinutes: impossibleTravel.elapsedMinutes,
+    } : null,
+  };
 }
