@@ -47,6 +47,14 @@ describe("tenant policy engine", () => {
     expect(result.decisionOverride).toBeNull();
   });
 
+  it("cannot lower risk score through a negative score delta", () => {
+    const result = evaluatePolicySet(context(), [
+      { ...blockPolicy, decision: "ALLOW" as const, score_delta: -50 },
+    ]);
+    expect(result.scoreDelta).toBe(0);
+    expect(result.decisionOverride).toBeNull();
+  });
+
   it("ignores unsupported or malformed condition structures", () => {
     const result = evaluatePolicySet(context(), [
       { ...blockPolicy, conditions: { all: [{ field: "tenant.secret", operator: "eq", value: "x" }] } },
@@ -79,6 +87,12 @@ describe("behavioral baseline scoring", () => {
   it("does not generate risk for a value close to baseline", () => {
     expect(scoreBehaviorAgainstBaseline(11, baseline).score).toBe(0);
   });
+
+  it("fails closed to an unready baseline when stored statistics are non-finite", () => {
+    const result = scoreBehaviorAgainstBaseline(90, { ...baseline, mean_value: Number.NaN });
+    expect(result.baselineReady).toBe(false);
+    expect(Number.isFinite(result.zScore)).toBe(true);
+  });
 });
 
 describe("advanced bot evidence fusion", () => {
@@ -94,6 +108,17 @@ describe("advanced bot evidence fusion", () => {
     });
     expect(result.score).toBe(0);
     expect(result.reasonCodes).toHaveLength(0);
+  });
+
+  it("does not return NaN when a stored confidence value is invalid", () => {
+    const now = Date.now();
+    const result = analyzeAdvancedBotSignals({
+      now,
+      botEvents: [{ occurredAt: new Date(now - 1_000).toISOString(), isBot: true, confidence: Number.NaN, signals: {} }],
+      activityEvents: [],
+    });
+    expect(Number.isFinite(result.score)).toBe(true);
+    expect(result.score).toBe(0);
   });
 
   it("raises a strong signal for a recent high-confidence bot observation", () => {
