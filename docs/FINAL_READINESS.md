@@ -2,16 +2,20 @@
 
 ## What is already implemented
 
-- 23 private security tables under `security`.
-- RLS enabled on all 23 tables.
+- Private `security` schema tables with RLS enabled, checked through the deployment verification gate.
+- Service-role-only database functions for signed-request nonces, atomic rate limits, security outbox claims, managed API-key rotation, and audit-ledger verification.
 - `anon` and `authenticated` have no schema usage for the private security schema.
-- Device, identity, network, bot, behavior, session, rate-limit and abuse pipelines.\n- Server-authoritative value state with idempotency and atomic anomaly persistence.\n- Concurrency-safe database-backed rate limiting.\n- Freshness windows for bot, behavior and value anomaly evidence.\n- Request parsing hardening, 64 KiB body cap, safe error output, security headers, and opt-in CORS.
+- Device, identity, network, bot, behavior, session, rate-limit and abuse pipelines.\n- Server-authoritative value state with idempotency and atomic anomaly persistence.\n- Concurrency-safe database-backed rate limiting.\n- Freshness windows for bot, behavior and value anomaly evidence.\n- Request parsing hardening, 64 KiB body cap, HMAC v1/v2 signatures, one-use nonces, safe error output, HSTS/security headers, and opt-in exact-origin CORS.
 - Deterministic weighted risk engine.
 - Graph correlation and graph-derived risk evidence.
 - AI advisory analysis with model versioning and prediction storage.
 - Structured security logging and request IDs.
 - Authenticated production API baseline.
-- Health endpoint.
+- Liveness (`/api/health`) and bounded database readiness (`/api/ready`) endpoints.
+- Managed API key lifecycle: rotate with grace, revoke, and explicitly retire legacy keys.
+- Tamper-evident audit ledger with a bounded hash-chain verifier.
+- Database-backed circuit breaker for optional analytics dependencies.
+- AI explicitly disabled unless `AI_ANALYZER_ENABLED=true` and all provider settings are present.
 - CI workflow definition.
 
 ## What you must do before real deployment
@@ -41,15 +45,18 @@ Store only its SHA-256 hash in:
 
 `security.tenants.api_key_hash`
 
-The raw key must be given to the tenant once and must never be committed to GitHub or stored in the database.
+The raw key must be given to the tenant once and must never be committed to GitHub or stored in the database. New integrations should use managed v2 keys from `scripts/rotate-tenant-api-key.mjs`; signatures must be generated on a trusted server. Retire legacy v1 compatibility only after v2 has been verified end-to-end.
 
 ### 4. Deploy the API
 Deploy the repository as a Node/Vercel-compatible project with the root directory set to the repository root.
 
 Expected endpoints:
 
-- `GET /api/health`
-- `POST /api/security-check`
+- `GET /api/health` — liveness only.
+- `GET /api/ready` — returns 200 only when the dedicated security database is reachable; otherwise 503.
+- `POST /api/security-check` — requires tenant auth plus v1/v2 request signature.
+- `POST /api/security-event` — requires tenant auth plus v1/v2 request signature.
+- `GET /api/internal/security-timeline` — disabled unless `SECURITY_OPS_TOKEN` is configured.
 
 ### 5. Live smoke test
 First test:
