@@ -60,22 +60,25 @@ async function handleDuckDbBatch(event: OutboxEvent) {
     summary: { outboxEventId: event.id },
   });
   try {
-    const rawResult = await withSecurityCircuitBreaker({
+    const analysis = await withSecurityCircuitBreaker({
       tenantId: payload.tenantId,
       circuitKey: "duckdb-analytics",
       failureThreshold: 5,
       windowSeconds: 60,
       openSeconds: 60,
-      operation: () => analyzeWithDuckDB(payload),
+      operation: async () => {
+        const rawResult = await analyzeWithDuckDB(payload);
+        const parsed = analyticsResponseSchema.parse(rawResult);
+        if (parsed.batchSize !== payload.events.length || parsed.anomalyCount !== parsed.anomalies.length) {
+          throw new Error("DUCKDB_RESPONSE_COUNT_MISMATCH");
+        }
+        const expectedTenantHash = hashValue(payload.tenantId);
+        if (parsed.anomalies.some((anomaly) => anomaly.tenantHash !== expectedTenantHash)) {
+          throw new Error("DUCKDB_TENANT_HASH_MISMATCH");
+        }
+        return parsed;
+      },
     });
-    const analysis = analyticsResponseSchema.parse(rawResult);
-    if (analysis.batchSize !== payload.events.length || analysis.anomalyCount !== analysis.anomalies.length) {
-      throw new Error("DUCKDB_RESPONSE_COUNT_MISMATCH");
-    }
-    const expectedTenantHash = hashValue(payload.tenantId);
-    if (analysis.anomalies.some((anomaly) => anomaly.tenantHash !== expectedTenantHash)) {
-      throw new Error("DUCKDB_TENANT_HASH_MISMATCH");
-    }
     const subjectLookup = new Map<string, string>();
     const sessionLookup = new Map<string, string>();
     for (const row of payload.events) {
