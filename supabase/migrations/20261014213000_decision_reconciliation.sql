@@ -42,7 +42,7 @@ begin
      or pg_catalog.char_length(p_enforcement_source) not between 1 and 80
      or p_enforcement_source !~ '^[A-Za-z0-9_.:-]+$'
      or (p_request_id is not null and pg_catalog.char_length(p_request_id) > 200)
-     or pg_catalog.coalesce(pg_catalog.cardinality(p_reason_codes), 0) > 128
+     or coalesce(pg_catalog.cardinality(p_reason_codes), 0) > 128
      or exists (
        select 1
        from pg_catalog.unnest(coalesce(p_reason_codes, '{}'::text[])) as item(reason_code)
