@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { env } from "../src/config/env";
-import { supabase } from "../src/db/supabase";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { ingestSecurityEvent } from "../src/security/ingest";
 import { securityLog } from "../src/security/observability";
