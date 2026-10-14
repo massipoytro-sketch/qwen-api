@@ -48,7 +48,7 @@ const canonical = [
   timestamp,
   nonce,
   bodyHash,
-].join("\\n");
+].join("\n");
 const digest = createHmac("sha256", apiKey).update(canonical, "utf8").digest("hex");
 
 const response = await fetch(endpoint, {
