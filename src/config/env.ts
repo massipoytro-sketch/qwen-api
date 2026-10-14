@@ -12,6 +12,7 @@ const envSchema = z.object({
   DUCKDB_ANALYTICS_TOKEN: z.string().min(32).optional(),
   HONEY_SENSOR_TOKEN: z.string().min(32).optional(),
   HONEY_TENANT_ID: z.uuid().optional(),
+  SECURITY_OPS_TOKEN: z.string().min(32).optional(),
 }).superRefine((value, ctx) => {
   const configured = [
     value.AI_ANALYZER_ENDPOINT,
@@ -48,4 +49,5 @@ export const env = envSchema.parse({
   DUCKDB_ANALYTICS_TOKEN: process.env.DUCKDB_ANALYTICS_TOKEN,
   HONEY_SENSOR_TOKEN: process.env.HONEY_SENSOR_TOKEN,
   HONEY_TENANT_ID: process.env.HONEY_TENANT_ID,
+  SECURITY_OPS_TOKEN: process.env.SECURITY_OPS_TOKEN,
 });
