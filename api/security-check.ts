@@ -4,6 +4,7 @@ import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { securityCheck } from "../src/security/check";
 import { securityLog } from "../src/security/observability";
+import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 import { env } from "../src/config/env";
 
 const bodySchema = z.object({
@@ -26,7 +27,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
       ...(requestId ? { "x-request-id": requestId } : {}),
       ...(env.SECURITY_API_CORS_ORIGIN ? {
         "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
-        "access-control-allow-headers": "authorization,content-type,x-request-id",
+        "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce",
         "access-control-allow-methods": "POST,OPTIONS",
         "vary": "Origin",
       } : {}),
@@ -83,18 +84,44 @@ export default async function handler(request: Request) {
       return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
     }
 
-    const limit = await checkRateLimit({
+    const signature = await verifyAndConsumeRequestSignature({
+      request,
+      rawBody,
+      apiKey,
       tenantId: tenant.data.id,
-      key: `api:${apiKey}`,
-      bucket: "security-check",
-      limit: 60,
-      windowSeconds: 60,
     });
+    if (!signature.valid) {
+      securityLog("request_signature_rejected", {
+        requestId,
+        tenantId: tenant.data.id,
+        reasonCode: signature.reasonCode,
+      });
+      return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
+    }
 
-    if (!limit.allowed) {
+    const rateLimitChecks = await Promise.all([
+      checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `api:${apiKey}`,
+        bucket: "security-check",
+        limit: 60,
+        windowSeconds: 60,
+      }),
+      ...(parsed.subjectId ? [checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `subject:${parsed.subjectId}`,
+        bucket: "security-check-subject",
+        limit: 30,
+        windowSeconds: 60,
+        subjectId: parsed.subjectId,
+      })] : []),
+    ]);
+    const blockedLimit = rateLimitChecks.find((limit) => !limit.allowed);
+
+    if (blockedLimit) {
       return json({
         error: "RATE_LIMITED",
-        retryAfter: Math.max(1, Math.ceil((new Date(limit.resetAt ?? new Date(Date.now() + 60_000).toISOString()).getTime() - Date.now()) / 1000)),
+        retryAfter: Math.max(1, Math.ceil((Date.parse(blockedLimit.resetAt) - Date.now()) / 1000)),
         requestId,
       }, 429, requestId);
     }

@@ -5,6 +5,7 @@ import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { ingestSecurityEvent } from "../src/security/ingest";
 import { securityLog } from "../src/security/observability";
+import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 
 const requestSchema = z.object({
   tenantId: z.uuid(),
@@ -25,7 +26,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(s
     ...(requestId ? { "x-request-id": requestId } : {}),
     ...(env.SECURITY_API_CORS_ORIGIN ? {
       "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
-      "access-control-allow-headers": "authorization,content-type,x-request-id",
+      "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce",
       "access-control-allow-methods": "POST,OPTIONS",
       vary: "Origin",
     } : {}),
@@ -60,17 +61,50 @@ export default async function handler(request: Request) {
     if (tenant.error) throw tenant.error;
     if (!tenant.data || tenant.data.status !== "active") return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
 
-    const limit = await checkRateLimit({
+    const signature = await verifyAndConsumeRequestSignature({
+      request,
+      rawBody,
+      apiKey,
       tenantId: tenant.data.id,
-      key: `ingest:${apiKey}`,
-      bucket: "security-event-ingest",
-      limit: 120,
-      windowSeconds: 60,
     });
-    if (!limit.allowed) {
+    if (!signature.valid) {
+      securityLog("request_signature_rejected", {
+        requestId,
+        tenantId: tenant.data.id,
+        reasonCode: signature.reasonCode,
+      });
+      return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
+    }
+
+    const rateLimitChecks = await Promise.all([
+      checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `ingest:${apiKey}`,
+        bucket: "security-event-ingest",
+        limit: 120,
+        windowSeconds: 60,
+      }),
+      checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `event-type:${parsed.type}`,
+        bucket: "security-event-type",
+        limit: 60,
+        windowSeconds: 60,
+      }),
+      ...(parsed.subjectId ? [checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `subject:${parsed.subjectId}`,
+        bucket: "security-event-subject",
+        limit: 60,
+        windowSeconds: 60,
+        subjectId: parsed.subjectId,
+      })] : []),
+    ]);
+    const blockedLimit = rateLimitChecks.find((limit) => !limit.allowed);
+    if (blockedLimit) {
       return json({
         error: "RATE_LIMITED",
-        retryAfter: Math.max(1, Math.ceil((Date.parse(limit.resetAt) - Date.now()) / 1000)),
+        retryAfter: Math.max(1, Math.ceil((Date.parse(blockedLimit.resetAt) - Date.now()) / 1000)),
         requestId,
       }, 429, requestId);
     }
