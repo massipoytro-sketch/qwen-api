@@ -7,6 +7,35 @@ const aiInputSchema = z.object({
   endpoint: z.url().optional(), apiKey: z.string().min(1), model: z.string().min(1).max(200), timeoutMs: z.number().int().min(500).max(30000).default(8000),
 });
 
+export function validateAIEndpoint(rawEndpoint: string, production = process.env.NODE_ENV === "production"): URL {
+  const endpoint = new URL(rawEndpoint);
+  if (endpoint.username || endpoint.password) throw new Error("AI_ANALYZER_ENDPOINT_CREDENTIALS_FORBIDDEN");
+  if (endpoint.protocol !== "https:" && (production || endpoint.protocol !== "http:")) throw new Error("AI_ANALYZER_HTTPS_REQUIRED");
+  if (!endpoint.hostname) throw new Error("AI_ANALYZER_ENDPOINT_INVALID");
+  return endpoint;
+}
+
+export async function readBoundedResponseText(response: Response, maxBytes = 1_048_576): Promise<string> {
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) throw new Error("AI_ANALYZER_RESPONSE_LIMIT_INVALID");
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("AI_ANALYZER_EMPTY_RESPONSE");
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      totalBytes += part.value.byteLength;
+      if (totalBytes > maxBytes) { await reader.cancel(); throw new Error("AI_ANALYZER_RESPONSE_TOO_LARGE"); }
+      chunks.push(part.value);
+    }
+  } finally { reader.releaseLock(); }
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(merged); } catch { throw new Error("AI_ANALYZER_INVALID_UTF8"); }
+}
+
 export function buildAIAdvisoryEvidence(input: { deterministicScore: number; signals: Array<{ signalName: string; source: string; score: number; confidence: number | null }> }) {
   const clamp = (value: number, max: number) => Math.max(0, Math.min(max, value));
   return {
@@ -14,10 +43,8 @@ export function buildAIAdvisoryEvidence(input: { deterministicScore: number; sig
     deterministicScore: Number.isFinite(input.deterministicScore) ? clamp(input.deterministicScore, 100) : 0,
     signalCount: input.signals.length,
     signals: input.signals.slice(0, 64).map((signal) => ({
-      signalName: signal.signalName.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 100),
-      source: signal.source.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 80),
-      score: Number.isFinite(signal.score) ? clamp(signal.score, 100) : 0,
-      confidence: signal.confidence !== null && Number.isFinite(signal.confidence) ? clamp(signal.confidence, 1) : null,
+      signalName: signal.signalName.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 100), source: signal.source.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 80),
+      score: Number.isFinite(signal.score) ? clamp(signal.score, 100) : 0, confidence: signal.confidence !== null && Number.isFinite(signal.confidence) ? clamp(signal.confidence, 1) : null,
     })),
   };
 }
@@ -26,7 +53,6 @@ const aiOutputSchema = z.object({
   riskScore: z.number().min(0).max(100), riskLevel: z.enum(["unknown", "low", "medium", "high", "critical"]), summary: z.string().max(4000),
   reasonCodes: z.array(z.string().max(100)).max(32), recommendedAction: z.enum(["ALLOW", "MONITOR", "CHALLENGE", "REVIEW", "BLOCK"]), confidence: z.number().min(0).max(1),
 });
-
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.filter((part): part is { text?: string } => typeof part === "object" && part !== null).map((part) => part.text ?? "").join("");
@@ -43,6 +69,8 @@ function parseAdvisoryJson(text: string): z.infer<typeof aiOutputSchema> {
 
 export async function analyzeWithAI(rawInput: z.input<typeof aiInputSchema>) {
   const input = aiInputSchema.parse(rawInput);
+  const endpoint = input.endpoint ? validateAIEndpoint(input.endpoint) : new URL("https://openrouter.ai/api/v1/chat/completions");
+  if (endpoint.hostname !== "openrouter.ai") throw new Error("AI_ANALYZER_PROVIDER_MISMATCH");
   const client = new OpenRouter({ apiKey: input.apiKey, appTitle: "GainiRen Security" });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.timeoutMs);
