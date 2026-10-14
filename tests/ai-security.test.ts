@@ -6,13 +6,6 @@ import {
   validateOpenRouterModel,
 } from "../src/security/ai";
 
-const evidenceSignals = (count: number) => Array.from({ length: count }, (_, index) => ({
-  signalName: `signal_${index}`,
-  source: "synthetic",
-  score: index,
-  confidence: 0.75,
-}));
-
 describe("OpenRouter advisory safety boundaries", () => {
   it("sends only bounded signal categories and numeric evidence", () => {
     const evidence = buildAIAdvisoryEvidence({
