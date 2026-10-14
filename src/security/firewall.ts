@@ -269,10 +269,10 @@ export function evaluateDefenseInDepth(rawInput: {
     const network = layers.find((item) => item.layer === "network" && item.action === "CHALLENGE");
     const type: ChallengeType = identity || network ? "step_up_mfa" :
       bot ? "proof_of_work" : "risk_based_verification";
-    const source = identity ?? bot ?? network ?? minimumLayer;
+    const source = identity ?? bot ?? network;
     recommendedChallenge = {
       type,
-      reasonCodes: source.reasonCodes.length ? source.reasonCodes : ["RISK_BASED_CHALLENGE"],
+      reasonCodes: source?.reasonCodes.length ? source.reasonCodes : ["RISK_BASED_CHALLENGE"],
       expiresInSeconds: 300,
     };
   }
