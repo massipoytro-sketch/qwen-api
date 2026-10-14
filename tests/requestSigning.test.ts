@@ -77,6 +77,34 @@ describe("versioned HMAC request signatures", () => {
     });
   });
 
+  it("changes when a fresh timestamp or nonce is used", () => {
+    const first = createRequestSignature({
+      apiKey,
+      method: "POST",
+      requestUrl,
+      timestamp,
+      nonce,
+      rawBody,
+    });
+    const second = createRequestSignature({
+      apiKey,
+      method: "POST",
+      requestUrl,
+      timestamp: String(Number(timestamp) + 1),
+      nonce: "0Bq2x8xJb7cA9Q6mH1pT4dVn",
+      rawBody,
+    });
+    expect(second).not.toBe(first);
+  });
+
+  it("does not accept a signature made with a different API key", () => {
+    const request = signedRequest();
+    expect(verifyRequestSignature(request, rawBody, "another-api-key", nowMs)).toEqual({
+      valid: false,
+      reasonCode: "INVALID_REQUEST_SIGNATURE",
+    });
+  });
+
   it("binds the signature to path and query", () => {
     const request = signedRequest();
     const altered = new Request("https://security.example.test/api/security-check?version=2", {
