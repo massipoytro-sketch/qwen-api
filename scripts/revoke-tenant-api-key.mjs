@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createClient } from "@supabase/supabase-js";
 
+import { assertSecurityProjectUrl } from "./lib/assert-security-project.mjs";
 const [tenantId, keyId] = process.argv.slice(2);
 const url = process.env.SUPABASE_URL;
 const serverKey = process.env.SUPABASE_SERVER_KEY;
@@ -14,6 +15,13 @@ if (!url || !serverKey) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVER_KEY. Never place secrets in Git or client code.");
   process.exit(2);
 }
+try {
+  assertSecurityProjectUrl(url);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Refusing database target.");
+  process.exit(2);
+}
+
 if (process.env.CONFIRM_KEY_REVOCATION !== "YES") {
   console.error("Refusing to revoke. Set CONFIRM_KEY_REVOCATION=YES after confirming the tenant and key id.");
   process.exit(2);
