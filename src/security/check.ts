@@ -152,7 +152,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   }
 
   const deterministicScore = aggregateRisk(signals);
-  if (env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL) {
+  if (env.AI_ANALYZER_ENABLED === "true" && env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL) {
     try {
       const ai = await analyzeWithAI({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId, endpoint: env.AI_ANALYZER_ENDPOINT, apiKey: env.AI_ANALYZER_API_KEY, model: env.AI_ANALYZER_MODEL, evidence: buildAIAdvisoryEvidence({ deterministicScore, signals }) });
       signals.push({ signalName: "ai_advisory", source: "ai", score: ai.riskScore, confidence: Math.min(0.5, ai.confidence * 0.5), evidence: { riskLevel: ai.riskLevel, reasonCodes: ai.reasonCodes, recommendedAction: ai.recommendedAction, predictionId: ai.predictionId } });
