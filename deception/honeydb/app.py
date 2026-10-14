@@ -71,6 +71,10 @@ def classify_path(path: str) -> tuple[str, str]:
         ("/debug/env", "debug", "debug_environment"),
         ("/backup/database.sql", "backup", "database_backup"),
         ("/database", "backup", "database_probe"),
+        ("/.aws/credentials", "environment", "cloud_credentials"),
+        ("/actuator/env", "debug", "actuator_environment"),
+        ("/backup/users.csv", "backup", "user_export"),
+        ("/graphql", "api_probe", "graphql_probe"),
     )
     for prefix, surface, category in routes:
         if path == prefix or (prefix != "/" and path.startswith(prefix + "/")):
@@ -310,6 +314,48 @@ def fake_backup():
 @app.route("/database", methods=["GET", "HEAD", "POST"])
 def fake_database():
     return jsonify({"database": "honeydb_mock", "tables": ["users", "sessions", "audit"], "dataset": "SYNTHETIC_ONLY"})
+
+
+@app.route("/.aws/credentials", methods=["GET", "HEAD"])
+def fake_cloud_credentials():
+    # Explicit, inert canaries only. These values are not syntactically valid provider credentials.
+    return Response(
+        "AWS_ACCESS_KEY_ID=HONEY-CANARY-NOT-A-CREDENTIAL\n"
+        "AWS_SECRET_ACCESS_KEY=HONEY-CANARY-NOT-A-CREDENTIAL\n"
+        "DATASET=SYNTHETIC_ONLY\n",
+        mimetype="text/plain",
+    )
+
+
+@app.route("/actuator/env", methods=["GET", "HEAD"])
+def fake_actuator_environment():
+    return jsonify({
+        "activeProfiles": ["synthetic-decoy"],
+        "propertySources": [{"name": "honeydb", "properties": {
+            "service.name": {"value": "gainiren-decoy"},
+            "database.url": {"value": "jdbc:postgresql://db.internal.invalid/honeydb_mock"},
+            "dataset": {"value": "SYNTHETIC_ONLY"},
+            "canary": {"value": "HONEY-CANARY-NOT-A-CREDENTIAL"},
+        }}],
+    })
+
+
+@app.route("/backup/users.csv", methods=["GET", "HEAD"])
+def fake_user_export():
+    return Response(
+        "id,email,role,dataset\n"
+        "honey-user-001,admin@example.invalid,administrator,SYNTHETIC_ONLY\n"
+        "honey-user-002,audit@example.invalid,auditor,SYNTHETIC_ONLY\n",
+        mimetype="text/csv",
+    )
+
+
+@app.route("/graphql", methods=["GET", "POST", "HEAD"])
+def fake_graphql():
+    return jsonify({
+        "errors": [{"message": "Synthetic decoy endpoint", "extensions": {"code": "HONEYDB_CANARY"}}],
+        "dataset": "SYNTHETIC_ONLY",
+    })
 
 
 @app.errorhandler(404)
