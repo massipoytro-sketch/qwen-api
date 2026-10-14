@@ -76,17 +76,35 @@ export default async function handler(request: Request) {
       return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
     }
 
-    const limit = await checkRateLimit({
-      tenantId: tenant.data.id,
-      key: `ingest:${apiKey}`,
-      bucket: "security-event-ingest",
-      limit: 120,
-      windowSeconds: 60,
-    });
-    if (!limit.allowed) {
+    const rateLimitChecks = await Promise.all([
+      checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `ingest:${apiKey}`,
+        bucket: "security-event-ingest",
+        limit: 120,
+        windowSeconds: 60,
+      }),
+      checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `event-type:${parsed.type}`,
+        bucket: "security-event-type",
+        limit: 60,
+        windowSeconds: 60,
+      }),
+      ...(parsed.subjectId ? [checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `subject:${parsed.subjectId}`,
+        bucket: "security-event-subject",
+        limit: 60,
+        windowSeconds: 60,
+        subjectId: parsed.subjectId,
+      })] : []),
+    ]);
+    const blockedLimit = rateLimitChecks.find((limit) => !limit.allowed);
+    if (blockedLimit) {
       return json({
         error: "RATE_LIMITED",
-        retryAfter: Math.max(1, Math.ceil((Date.parse(limit.resetAt) - Date.now()) / 1000)),
+        retryAfter: Math.max(1, Math.ceil((Date.parse(blockedLimit.resetAt) - Date.now()) / 1000)),
         requestId,
       }, 429, requestId);
     }
