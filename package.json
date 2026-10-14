@@ -9,7 +9,11 @@
     "test": "vitest run",
     "lint": "eslint .",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
-    "start": "tsx server.ts"
+    "start": "tsx server.ts",
+    "keys:rotate": "node scripts/rotate-tenant-api-key.mjs",
+    "keys:revoke": "node scripts/revoke-tenant-api-key.mjs",
+    "keys:retire-legacy": "node scripts/retire-legacy-tenant-api-key.mjs",
+    "audit:verify": "node scripts/verify-security-audit-ledger.mjs"
   },
   "dependencies": {
     "@fingerprintjs/fingerprintjs": "^5.2.0",
