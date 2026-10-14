@@ -14,16 +14,14 @@ const envSchema = z.object({
   HONEY_TENANT_ID: z.uuid().optional(),
   SECURITY_OPS_TOKEN: z.string().min(32).optional(),
 }).superRefine((value, ctx) => {
-  if (value.OPENROUTER_ENABLED === "true" && !value.OPENROUTER_API_KEY) {
-    ctx.addIssue({ code: "custom", path: ["OPENROUTER_API_KEY"], message: "OpenRouter API key is required when OpenRouter AI is enabled" });
-  }
+  if (value.OPENROUTER_ENABLED === "true" && !value.OPENROUTER_API_KEY) ctx.addIssue({ code: "custom", path: ["OPENROUTER_API_KEY"], message: "OpenRouter API key is required when OpenRouter AI is enabled" });
   const duckDbConfigured = [value.DUCKDB_ANALYTICS_URL, value.DUCKDB_ANALYTICS_TOKEN].filter(Boolean).length;
   if (duckDbConfigured !== 0 && duckDbConfigured !== 2) ctx.addIssue({ code: "custom", path: ["DUCKDB_ANALYTICS_URL"], message: "DuckDB worker URL and token must be configured together" });
   const honeyConfigured = [value.HONEY_SENSOR_TOKEN, value.HONEY_TENANT_ID].filter(Boolean).length;
   if (honeyConfigured !== 0 && honeyConfigured !== 2) ctx.addIssue({ code: "custom", path: ["HONEY_SENSOR_TOKEN"], message: "Honey sensor token and dedicated tenant ID must be configured together" });
 });
 
-export const env = envSchema.parse({
+const parsedEnv = envSchema.parse({
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_SERVER_KEY: process.env.SUPABASE_SERVER_KEY,
   SECURITY_API_CORS_ORIGIN: process.env.SECURITY_API_CORS_ORIGIN,
@@ -38,11 +36,10 @@ export const env = envSchema.parse({
   SECURITY_OPS_TOKEN: process.env.SECURITY_OPS_TOKEN,
 });
 
-// Compatibility surface for the existing deterministic security-check pipeline.
-// Values are derived from OpenRouter and are never logged or exposed to clients.
-Object.assign(env, {
-  AI_ANALYZER_ENABLED: env.OPENROUTER_ENABLED,
+export const env = {
+  ...parsedEnv,
+  AI_ANALYZER_ENABLED: parsedEnv.OPENROUTER_ENABLED,
   AI_ANALYZER_ENDPOINT: "https://openrouter.ai/api/v1/chat/completions",
-  AI_ANALYZER_API_KEY: env.OPENROUTER_API_KEY,
-  AI_ANALYZER_MODEL: env.OPENROUTER_MODEL,
-});
+  AI_ANALYZER_API_KEY: parsedEnv.OPENROUTER_API_KEY,
+  AI_ANALYZER_MODEL: parsedEnv.OPENROUTER_MODEL,
+};
