@@ -15,6 +15,41 @@ const envSchema = z.object({
   HONEY_TENANT_ID: z.uuid().optional(),
   SECURITY_OPS_TOKEN: z.string().min(32).optional(),
 }).superRefine((value, ctx) => {
+  const production = process.env.NODE_ENV === "production";
+  const parsedSupabaseUrl = new URL(value.SUPABASE_URL);
+  if (production && parsedSupabaseUrl.protocol !== "https:") {
+    ctx.addIssue({ code: "custom", path: ["SUPABASE_URL"], message: "Production Supabase URL must use HTTPS" });
+  }
+
+  if (value.SECURITY_API_CORS_ORIGIN) {
+    const cors = new URL(value.SECURITY_API_CORS_ORIGIN);
+    if (
+      cors.username || cors.password || cors.search || cors.hash ||
+      cors.pathname !== "/" || (production && cors.protocol !== "https:")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SECURITY_API_CORS_ORIGIN"],
+        message: "CORS origin must be a bare origin; production origins must use HTTPS",
+      });
+    }
+  }
+
+  for (const [name, endpoint] of [
+    ["AI_ANALYZER_ENDPOINT", value.AI_ANALYZER_ENDPOINT],
+    ["DUCKDB_ANALYTICS_URL", value.DUCKDB_ANALYTICS_URL],
+  ] as const) {
+    if (!endpoint) continue;
+    const parsedEndpoint = new URL(endpoint);
+    if (parsedEndpoint.username || parsedEndpoint.password || parsedEndpoint.hash || (production && parsedEndpoint.protocol !== "https:")) {
+      ctx.addIssue({
+        code: "custom",
+        path: [name],
+        message: "Production dependency endpoints must use HTTPS and URLs must not contain credentials or fragments",
+      });
+    }
+  }
+
   const configured = [
     value.AI_ANALYZER_ENDPOINT,
     value.AI_ANALYZER_API_KEY,
