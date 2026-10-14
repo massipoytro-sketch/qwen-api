@@ -12,6 +12,20 @@ export type TenantApiKeyAuthentication = {
   keyId: string | null;
 };
 
+export function isManagedKeyUsable(input: {
+  status: "active" | "grace" | "revoked";
+  validFrom: string;
+  expiresAt?: string | null;
+  graceUntil?: string | null;
+}, nowMs = Date.now()): boolean {
+  const validFrom = Date.parse(input.validFrom);
+  const expiresAt = input.expiresAt ? Date.parse(input.expiresAt) : Number.POSITIVE_INFINITY;
+  const graceUntil = input.graceUntil ? Date.parse(input.graceUntil) : Number.NEGATIVE_INFINITY;
+  if (!Number.isFinite(validFrom) || nowMs < validFrom || nowMs >= expiresAt) return false;
+  if (input.status === "active") return true;
+  return input.status === "grace" && Number.isFinite(graceUntil) && nowMs < graceUntil;
+}
+
 function hashesMatch(candidate: string, stored: string | null | undefined): boolean {
   if (!stored || !/^[a-f0-9]{64}$/.test(stored)) return false;
   const candidateBytes = Buffer.from(hashValue(candidate), "hex");
@@ -54,13 +68,12 @@ export async function authenticateTenantApiKey(input: {
     const key = keyResult.data;
     if (!key || !hashesMatch(input.apiKey, key.key_hash)) return null;
 
-    const validFrom = Date.parse(key.valid_from);
-    const expiresAt = key.expires_at ? Date.parse(key.expires_at) : Number.POSITIVE_INFINITY;
-    const graceUntil = key.grace_until ? Date.parse(key.grace_until) : Number.NEGATIVE_INFINITY;
-    if (!Number.isFinite(validFrom) || now < validFrom || now >= expiresAt) return null;
-    const active = key.status === "active";
-    const inGrace = key.status === "grace" && Number.isFinite(graceUntil) && now < graceUntil;
-    if (!active && !inGrace) return null;
+    if (!isManagedKeyUsable({
+      status: key.status,
+      validFrom: key.valid_from,
+      expiresAt: key.expires_at,
+      graceUntil: key.grace_until,
+    }, now)) return null;
 
     return { tenantId, signingVersion: "v2", keyId: keyIdValue };
   }
