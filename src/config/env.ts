@@ -25,7 +25,7 @@ const envSchema = z.object({
     const cors = new URL(value.SECURITY_API_CORS_ORIGIN);
     if (
       cors.username || cors.password || cors.search || cors.hash ||
-      cors.pathname !== "/" || (production && cors.protocol !== "https:")
+      cors.pathname !== "/" || value.SECURITY_API_CORS_ORIGIN !== cors.origin || (production && cors.protocol !== "https:")
     ) {
       ctx.addIssue({
         code: "custom",
