@@ -59,7 +59,7 @@ SUPABASE_SERVER_KEY='<server-only-key>' \
 node scripts/provision-tenant.mjs "GainiRen"
 ```
 
-The script stores only a SHA-256 hash in `security.tenants.api_key_hash`, then prints a new API key once. Save it in a secret manager. The script creates an active tenant, so only run it when you intend to provision that tenant. Never execute it against the older rewards-platform project.
+The script calls the service-role-only `security.provision_security_tenant` transaction, creating the tenant and its canonical `security.tenant_api_keys` row atomically. It stores only a SHA-256 hash (the legacy `tenants.api_key_hash` remains null) and prints the new API key once along with its key ID. Save both securely. The script creates an active tenant, so only run it when you intend to provision that tenant. Never execute it against the older rewards-platform project.
 
 ## Deploy order
 
