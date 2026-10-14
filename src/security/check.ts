@@ -202,9 +202,13 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
       evidence: { action: item.action, reasonCodes: item.reasonCodes, version: firewallResult.version },
     }));
   const finalSignals = [...signals, ...firewallSignals];
+  const policyDecisionFloor = policyResult.decisionOverride
+    ? scoreFloorForDecision(policyResult.decisionOverride)
+    : 0;
   const score = clamp(Math.max(
     prePolicyScore + policyResult.scoreDelta,
     scoreFloorForDecision(firewallResult.minimumDecision),
+    policyDecisionFloor,
   ));
   const rank: Record<SecurityDecision, number> = { ALLOW: 0, MONITOR: 1, CHALLENGE: 2, REVIEW: 3, BLOCK: 4 };
   const scoreDecision = decisionFor(score);
