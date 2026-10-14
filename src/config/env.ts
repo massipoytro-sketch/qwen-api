@@ -4,6 +4,7 @@ const envSchema = z.object({
   SUPABASE_URL: z.url(),
   SUPABASE_SERVER_KEY: z.string().min(1),
   SECURITY_API_CORS_ORIGIN: z.url().optional(),
+  AI_ANALYZER_ENABLED: z.enum(["true", "false"]).default("false"),
   AI_ANALYZER_ENDPOINT: z.url().optional(),
   AI_ANALYZER_API_KEY: z.string().min(1).optional(),
   AI_ANALYZER_MODEL: z.string().min(1).max(200).optional(),
@@ -12,6 +13,7 @@ const envSchema = z.object({
   DUCKDB_ANALYTICS_TOKEN: z.string().min(32).optional(),
   HONEY_SENSOR_TOKEN: z.string().min(32).optional(),
   HONEY_TENANT_ID: z.uuid().optional(),
+  SECURITY_OPS_TOKEN: z.string().min(32).optional(),
 }).superRefine((value, ctx) => {
   const configured = [
     value.AI_ANALYZER_ENDPOINT,
@@ -40,6 +42,7 @@ export const env = envSchema.parse({
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_SERVER_KEY: process.env.SUPABASE_SERVER_KEY,
   SECURITY_API_CORS_ORIGIN: process.env.SECURITY_API_CORS_ORIGIN,
+  AI_ANALYZER_ENABLED: process.env.AI_ANALYZER_ENABLED ?? "false",
   AI_ANALYZER_ENDPOINT: process.env.AI_ANALYZER_ENDPOINT,
   AI_ANALYZER_API_KEY: process.env.AI_ANALYZER_API_KEY,
   AI_ANALYZER_MODEL: process.env.AI_ANALYZER_MODEL,
@@ -48,4 +51,5 @@ export const env = envSchema.parse({
   DUCKDB_ANALYTICS_TOKEN: process.env.DUCKDB_ANALYTICS_TOKEN,
   HONEY_SENSOR_TOKEN: process.env.HONEY_SENSOR_TOKEN,
   HONEY_TENANT_ID: process.env.HONEY_TENANT_ID,
+  SECURITY_OPS_TOKEN: process.env.SECURITY_OPS_TOKEN,
 });

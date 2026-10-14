@@ -7,6 +7,7 @@ import { safeErrorCode, safeErrorStatus, securityLog } from "./observability";
 import { analyzeVelocity } from "./velocity";
 import { analyzeAccountTakeoverSignals, analyzeConcurrentSessionAnomalies } from "./detectors";
 import { analyzeAdvancedBotSignals, evaluateTenantPolicies, getBehaviorBaselineScore, ensureInvestigationCase, enqueueSecurityEvent, upsertFraudCluster } from "./platform";
+import { evaluateDefenseInDepth, scoreFloorForDecision } from "./firewall";
 import type { SecurityCheckInput, SecurityCheckResult, SecurityDecision } from "./types";
 
 const inputSchema = z.object({
@@ -151,7 +152,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   }
 
   const deterministicScore = aggregateRisk(signals);
-  if (env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL) {
+  if (env.AI_ANALYZER_ENABLED === "true" && env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL) {
     try {
       const ai = await analyzeWithAI({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId, endpoint: env.AI_ANALYZER_ENDPOINT, apiKey: env.AI_ANALYZER_API_KEY, model: env.AI_ANALYZER_MODEL, evidence: buildAIAdvisoryEvidence({ deterministicScore, signals }) });
       signals.push({ signalName: "ai_advisory", source: "ai", score: ai.riskScore, confidence: Math.min(0.5, ai.confidence * 0.5), evidence: { riskLevel: ai.riskLevel, reasonCodes: ai.reasonCodes, recommendedAction: ai.recommendedAction, predictionId: ai.predictionId } });
@@ -177,30 +178,189 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     valueJumpScore: latestValueSignal?.score ?? 0,
     relatedSubjectCount: graphScoreInfo?.relatedSubjectCount ?? 0,
   });
-  const score = clamp(prePolicyScore + policyResult.scoreDelta);
+  const knownSubjectStatus = subjectResult.data?.status;
+  const firewallSubjectStatus = knownSubjectStatus === "active" || knownSubjectStatus === "suspended" ||
+    knownSubjectStatus === "blocked" || knownSubjectStatus === "deleted" ? knownSubjectStatus : "unknown";
+  const firewallResult = evaluateDefenseInDepth({
+    score: prePolicyScore,
+    subjectStatus: firewallSubjectStatus,
+    signals: signals.map((signal) => ({
+      signalName: signal.signalName,
+      source: signal.source,
+      score: signal.score,
+      confidence: signal.confidence,
+      evidence: signal.evidence,
+    })),
+  });
+  const firewallSignals: Signal[] = firewallResult.layers
+    .filter((item) => item.action !== "ALLOW")
+    .map((item) => ({
+      signalName: `firewall_${item.layer}`,
+      source: "firewall",
+      score: item.score,
+      confidence: item.confidence,
+      evidence: { action: item.action, reasonCodes: item.reasonCodes, version: firewallResult.version },
+    }));
+  const finalSignals = [...signals, ...firewallSignals];
+  const policyDecisionFloor = policyResult.decisionOverride
+    ? scoreFloorForDecision(policyResult.decisionOverride)
+    : 0;
+  const score = clamp(Math.max(
+    prePolicyScore + policyResult.scoreDelta,
+    scoreFloorForDecision(firewallResult.minimumDecision),
+    policyDecisionFloor,
+  ));
   const rank: Record<SecurityDecision, number> = { ALLOW: 0, MONITOR: 1, CHALLENGE: 2, REVIEW: 3, BLOCK: 4 };
   const scoreDecision = decisionFor(score);
-  const decision = policyResult.decisionOverride && rank[policyResult.decisionOverride] > rank[scoreDecision] ? policyResult.decisionOverride : scoreDecision;
+  const decisionCandidates: SecurityDecision[] = [scoreDecision, firewallResult.minimumDecision];
+  if (policyResult.decisionOverride) decisionCandidates.push(policyResult.decisionOverride);
+  const decision = decisionCandidates.reduce((best, candidate) =>
+    rank[candidate] > rank[best] ? candidate : best,
+  "ALLOW" as SecurityDecision);
   const riskLevel = riskLevelFor(score);
   const policyReasonCodes = policyResult.matched.map((policy) => policy.reasonCode);
-  securityLog("security_check", { requestId: input.requestId ?? null, tenantId: input.tenantId, subjectId: input.subjectId ?? null, score, decision, signalCount: signals.length, policyMatches: policyResult.matched.length });
-  const assessmentInsert = await supabase.schema("security").from("risk_assessments").insert({ tenant_id: input.tenantId, subject_id: input.subjectId ?? null, session_id: input.sessionId ?? null, score, risk_level: riskLevel, assessment_version: "baseline-v3", explanation: { requestId: input.requestId ?? null, signalCount: signals.length, sources: signals.map((signal) => signal.source), aggregation: "weighted_evidence_v2", policies: policyResult.matched.map((policy) => ({ id: policy.id, name: policy.name, reasonCode: policy.reasonCode })), policyCount: policyResult.policyCount } }).select("id").single();
+  const challengeRecommendation = decision === "CHALLENGE"
+    ? firewallResult.recommendedChallenge ?? {
+        type: "risk_based_verification" as const,
+        reasonCodes: policyReasonCodes.length ? policyReasonCodes : ["RISK_THRESHOLD_CHALLENGE"],
+        expiresInSeconds: 300,
+      }
+    : null;
+  const firewallAudit = {
+    version: firewallResult.version,
+    minimumDecision: firewallResult.minimumDecision,
+    reasonCodes: firewallResult.reasonCodes,
+    layers: firewallResult.layers.map((item) => ({
+      layer: item.layer,
+      action: item.action,
+      score: item.score,
+      confidence: item.confidence,
+      reasonCodes: item.reasonCodes,
+    })),
+  };
+  securityLog("security_check", {
+    requestId: input.requestId ?? null,
+    tenantId: input.tenantId,
+    subjectId: input.subjectId ?? null,
+    score,
+    decision,
+    signalCount: finalSignals.length,
+    policyMatches: policyResult.matched.length,
+    firewallMinimumDecision: firewallResult.minimumDecision,
+    firewallEscalations: firewallSignals.length,
+  });
+  const assessmentInsert = await supabase.schema("security").from("risk_assessments").insert({
+    tenant_id: input.tenantId,
+    subject_id: input.subjectId ?? null,
+    session_id: input.sessionId ?? null,
+    score,
+    risk_level: riskLevel,
+    assessment_version: "defense-in-depth-v1",
+    explanation: {
+      requestId: input.requestId ?? null,
+      signalCount: finalSignals.length,
+      sources: finalSignals.map((signal) => signal.source),
+      aggregation: "weighted_evidence_v2",
+      policies: policyResult.matched.map((policy) => ({ id: policy.id, name: policy.name, reasonCode: policy.reasonCode })),
+      policyCount: policyResult.policyCount,
+      firewall: firewallAudit,
+      challengeRecommendation,
+    },
+  }).select("id").single();
   if (assessmentInsert.error) throw assessmentInsert.error;
-  if (signals.length > 0) {
-    const signalInsert = await supabase.schema("security").from("risk_signals").insert(signals.map((signal) => ({ assessment_id: assessmentInsert.data.id, signal_name: signal.signalName, source: signal.source, score: signal.score, confidence: signal.confidence, evidence: signal.evidence })));
+  if (finalSignals.length > 0) {
+    const signalInsert = await supabase.schema("security").from("risk_signals").insert(finalSignals.map((signal) => ({
+      assessment_id: assessmentInsert.data.id,
+      signal_name: signal.signalName,
+      source: signal.source,
+      score: signal.score,
+      confidence: signal.confidence,
+      evidence: signal.evidence,
+    })));
     if (signalInsert.error) throw signalInsert.error;
   }
-  const decisionInsert = await supabase.schema("security").from("risk_decisions").insert({ assessment_id: assessmentInsert.data.id, decision, reason_codes: [...signals.map((signal) => signal.signalName), ...policyReasonCodes], decision_version: "policy-engine-v1" });
+  const decisionInsert = await supabase.schema("security").from("risk_decisions").insert({
+    assessment_id: assessmentInsert.data.id,
+    decision,
+    reason_codes: [...finalSignals.map((signal) => signal.signalName), ...policyReasonCodes, ...firewallResult.reasonCodes],
+    decision_version: "defense-in-depth-v1",
+  }).select("id").single();
   if (decisionInsert.error) throw decisionInsert.error;
   if (input.requestId) {
-    const auditInsert = await supabase.schema("security").from("audit_events").insert({ tenant_id: input.tenantId, actor_type: "system", action: "security_check", resource_type: "risk_assessment", resource_id: assessmentInsert.data.id, request_id: input.requestId, details: { decision, score, riskLevel, version: "baseline-v3", policyMatches: policyResult.matched.map((policy) => policy.id) } });
+    const auditInsert = await supabase.schema("security").from("audit_events").insert({
+      tenant_id: input.tenantId,
+      actor_type: "system",
+      action: "security_check",
+      resource_type: "risk_assessment",
+      resource_id: assessmentInsert.data.id,
+      request_id: input.requestId,
+      details: {
+        decision, score, riskLevel, version: "defense-in-depth-v1",
+        policyMatches: policyResult.matched.map((policy) => policy.id),
+        firewallMinimumDecision: firewallResult.minimumDecision,
+        firewallReasonCodes: firewallResult.reasonCodes,
+      },
+    });
     if (auditInsert.error) throw auditInsert.error;
   }
+  const ledgerAppend = await supabase.schema("security").rpc("append_security_ledger_entry", {
+    p_tenant_id: input.tenantId,
+    p_action: "risk_assessment_decided",
+    p_resource_type: "risk_assessment",
+    p_resource_id: assessmentInsert.data.id,
+    p_request_id: input.requestId ?? null,
+    p_actor_type: "system",
+    p_details: {
+      subjectId: input.subjectId ?? null,
+      sessionId: input.sessionId ?? null,
+      decision,
+      score,
+      riskLevel,
+      assessmentVersion: "defense-in-depth-v1",
+      firewallMinimumDecision: firewallResult.minimumDecision,
+      firewallReasonCodes: firewallResult.reasonCodes,
+      signalNames: finalSignals.map((signal) => signal.signalName).slice(0, 128),
+    },
+  });
+  if (ledgerAppend.error) {
+    securityLog("security_ledger_append_failed", {
+      requestId: input.requestId ?? null,
+      tenantId: input.tenantId,
+      errorCode: safeErrorCode(ledgerAppend.error),
+      ...(safeErrorStatus(ledgerAppend.error) ? { errorStatus: safeErrorStatus(ledgerAppend.error) } : {}),
+    });
+    throw new Error("SECURITY_LEDGER_APPEND_FAILED");
+  }
   const backgroundTasks: Promise<unknown>[] = [
-    enqueueSecurityEvent({ tenantId: input.tenantId, eventType: "security.risk_assessment.created", aggregateId: assessmentInsert.data.id, dedupeKey: input.requestId ? `risk:${input.requestId}` : assessmentInsert.data.id, payload: { assessmentId: assessmentInsert.data.id, subjectId: input.subjectId ?? null, sessionId: input.sessionId ?? null, score, riskLevel, decision, signalNames: signals.map((signal) => signal.signalName) } }),
+    enqueueSecurityEvent({
+      tenantId: input.tenantId,
+      eventType: "security.risk_assessment.created",
+      aggregateId: assessmentInsert.data.id,
+      dedupeKey: input.requestId ? `risk:${input.requestId}` : assessmentInsert.data.id,
+      payload: {
+        assessmentId: assessmentInsert.data.id,
+        subjectId: input.subjectId ?? null,
+        sessionId: input.sessionId ?? null,
+        score, riskLevel, decision,
+        signalNames: finalSignals.map((signal) => signal.signalName),
+        firewallMinimumDecision: firewallResult.minimumDecision,
+        firewallReasonCodes: firewallResult.reasonCodes,
+      },
+    }),
   ];
   if (input.subjectId && (score >= 70 || decision === "BLOCK" || decision === "REVIEW")) {
-    backgroundTasks.push(ensureInvestigationCase({ tenantId: input.tenantId, subjectId: input.subjectId, assessmentId: assessmentInsert.data.id, score, decision, evidence: { signalNames: signals.map((signal) => signal.signalName), policyMatches: policyReasonCodes } }));
+    backgroundTasks.push(ensureInvestigationCase({
+      tenantId: input.tenantId,
+      subjectId: input.subjectId,
+      assessmentId: assessmentInsert.data.id,
+      score,
+      decision,
+      evidence: {
+        signalNames: finalSignals.map((signal) => signal.signalName),
+        policyMatches: policyReasonCodes,
+        firewall: firewallAudit,
+      },
+    }));
   }
   if (input.subjectId && graphScoreInfo && graphScoreInfo.relatedSubjects.length >= 2) {
     backgroundTasks.push(upsertFraudCluster({ tenantId: input.tenantId, clusterType: "mixed", subjectIds: [input.subjectId, ...graphScoreInfo.relatedSubjects.map((subject) => subject.subjectId)], riskScore: graphScoreInfo.connectionScore, evidence: { relatedSubjectCount: graphScoreInfo.relatedSubjectCount, riskyConnectionCount: graphScoreInfo.riskyConnectionCount, version: "fraud-clusters-v1" } }));
@@ -247,5 +407,5 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   }
   const settled = await Promise.allSettled(backgroundTasks);
   for (const item of settled) if (item.status === "rejected") securityLog("security_background_task_failed", { requestId: input.requestId ?? null, tenantId: input.tenantId, errorCode: item.reason instanceof Error ? item.reason.name : "UNKNOWN_ERROR" });
-  return { decision, score, riskLevel, assessmentId: assessmentInsert.data.id };
+  return { decision, score, riskLevel, assessmentId: assessmentInsert.data.id, challengeRecommendation };
 }

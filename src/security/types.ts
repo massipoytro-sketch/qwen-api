@@ -20,4 +20,9 @@ export type SecurityCheckResult = {
   score: number;
   riskLevel: "unknown" | "low" | "medium" | "high" | "critical";
   assessmentId?: string;
+  challengeRecommendation?: {
+    type: "step_up_mfa" | "proof_of_work" | "risk_based_verification";
+    reasonCodes: string[];
+    expiresInSeconds: number;
+  } | null;
 };

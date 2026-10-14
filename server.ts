@@ -6,6 +6,7 @@ import securityCheckHandler from "./api/security-check";
 import securityEventHandler from "./api/security-event";
 import outboxWorkerHandler from "./api/outbox-worker";
 import honeyAlertHandler from "./api/honey-alert";
+import securityTimelineHandler from "./api/security-timeline";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const PORT = Number(process.env.PORT ?? "3000");
@@ -15,6 +16,7 @@ const API_HANDLERS = new Map<string, (request: Request) => Promise<Response> | R
   ["/api/security-event", securityEventHandler],
   ["/api/outbox-worker", outboxWorkerHandler],
   ["/api/internal/honey-alert", honeyAlertHandler],
+  ["/api/internal/security-timeline", securityTimelineHandler],
 ]);
 const HOP_BY_HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -195,7 +197,7 @@ server.listen(PORT, "0.0.0.0", () => {
     port: PORT,
     outboxWorkerEnabled: Boolean(env.OUTBOX_WORKER_TOKEN),
     analyticsEnabled: Boolean(env.DUCKDB_ANALYTICS_URL && env.DUCKDB_ANALYTICS_TOKEN),
-    aiEnabled: Boolean(env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL),
+    aiEnabled: env.AI_ANALYZER_ENABLED === "true" && Boolean(env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL),
   }));
 });
 
