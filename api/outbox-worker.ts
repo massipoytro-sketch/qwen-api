@@ -5,6 +5,7 @@ import { supabase } from "../src/db/supabase";
 import { analyzeWithDuckDB, processSecurityOutboxBatch, saveAnalyticsRun, type OutboxEvent } from "../src/security/platform";
 import { hashValue } from "../src/security/utils";
 import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
+import { withSecurityCircuitBreaker } from "../src/security/circuitBreaker";
 
 const requestSchema = z.object({ batchSize: z.number().int().min(1).max(100).default(25) }).strict();
 const analyticsPayloadSchema = z.object({
@@ -59,7 +60,14 @@ async function handleDuckDbBatch(event: OutboxEvent) {
     summary: { outboxEventId: event.id },
   });
   try {
-    const rawResult = await analyzeWithDuckDB(payload);
+    const rawResult = await withSecurityCircuitBreaker({
+      tenantId: payload.tenantId,
+      circuitKey: "duckdb-analytics",
+      failureThreshold: 5,
+      windowSeconds: 60,
+      openSeconds: 60,
+      operation: () => analyzeWithDuckDB(payload),
+    });
     const analysis = analyticsResponseSchema.parse(rawResult);
     if (analysis.batchSize !== payload.events.length || analysis.anomalyCount !== analysis.anomalies.length) {
       throw new Error("DUCKDB_RESPONSE_COUNT_MISMATCH");
