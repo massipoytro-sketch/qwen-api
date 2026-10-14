@@ -44,7 +44,7 @@ class TargetValidationTests(unittest.TestCase):
                 headers["x-gainiren-nonce"],
                 hashlib.sha256(body.encode("utf-8")).hexdigest(),
             ]
-            canonical = "\\n".join(fields)
+            canonical = "\n".join(fields)
             expected = hmac.new(
                 security_probe.API_KEY.encode("utf-8"),
                 canonical.encode("utf-8"),
