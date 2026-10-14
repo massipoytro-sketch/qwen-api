@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
+import { assertSecurityProjectUrl } from "./lib/assert-security-project.mjs";
 const [nameArg, ...rest] = process.argv.slice(2);
 const name = [nameArg, ...rest].join(" ").trim();
 const url = process.env.SUPABASE_URL;
@@ -14,6 +15,13 @@ if (!url || !serverKey) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVER_KEY. Never put these secrets in Git.");
   process.exit(2);
 }
+try {
+  assertSecurityProjectUrl(url);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Refusing database target.");
+  process.exit(2);
+}
+
 
 const apiKey = `gr_live_${randomBytes(32).toString("base64url")}`;
 const apiKeyHash = createHash("sha256").update(apiKey, "utf8").digest("hex");
