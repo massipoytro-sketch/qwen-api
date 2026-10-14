@@ -330,6 +330,7 @@ def fake_cloud_credentials():
 @app.route("/actuator/env", methods=["GET", "HEAD"])
 def fake_actuator_environment():
     return jsonify({
+        "dataset": "SYNTHETIC_ONLY",
         "activeProfiles": ["synthetic-decoy"],
         "propertySources": [{"name": "honeydb", "properties": {
             "service.name": {"value": "gainiren-decoy"},
