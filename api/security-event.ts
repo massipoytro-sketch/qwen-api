@@ -5,6 +5,7 @@ import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { ingestSecurityEvent } from "../src/security/ingest";
 import { securityLog } from "../src/security/observability";
+import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 
 const requestSchema = z.object({
   tenantId: z.uuid(),
@@ -25,7 +26,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(s
     ...(requestId ? { "x-request-id": requestId } : {}),
     ...(env.SECURITY_API_CORS_ORIGIN ? {
       "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
-      "access-control-allow-headers": "authorization,content-type,x-request-id",
+      "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce",
       "access-control-allow-methods": "POST,OPTIONS",
       vary: "Origin",
     } : {}),
@@ -59,6 +60,21 @@ export default async function handler(request: Request) {
       .select("id,status").eq("id", parsed.tenantId).eq("api_key_hash", keyHash).maybeSingle();
     if (tenant.error) throw tenant.error;
     if (!tenant.data || tenant.data.status !== "active") return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
+
+    const signature = await verifyAndConsumeRequestSignature({
+      request,
+      rawBody,
+      apiKey,
+      tenantId: tenant.data.id,
+    });
+    if (!signature.valid) {
+      securityLog("request_signature_rejected", {
+        requestId,
+        tenantId: tenant.data.id,
+        reasonCode: signature.reasonCode,
+      });
+      return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
+    }
 
     const limit = await checkRateLimit({
       tenantId: tenant.data.id,
