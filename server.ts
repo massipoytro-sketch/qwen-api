@@ -197,7 +197,7 @@ server.listen(PORT, "0.0.0.0", () => {
     port: PORT,
     outboxWorkerEnabled: Boolean(env.OUTBOX_WORKER_TOKEN),
     analyticsEnabled: Boolean(env.DUCKDB_ANALYTICS_URL && env.DUCKDB_ANALYTICS_TOKEN),
-    aiEnabled: Boolean(env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL),
+    aiEnabled: env.AI_ANALYZER_ENABLED === "true" && Boolean(env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL),
   }));
 });
 
