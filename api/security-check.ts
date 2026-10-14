@@ -30,9 +30,9 @@ export default async function handler(request: Request) {
   let body: unknown; try { body = JSON.parse(rawBody); } catch { return json({ error: "INVALID_JSON", requestId }, 400, requestId); }
   const parsed = bodySchema.parse(body);
   const keyHash = hashValue(apiKey);
-  const credential = await supabase.schema("security").rpc("authenticate_api_credential", { p_tenant_id: parsed.tenantId, p_key_hash: keyHash });
+  const credential = await supabase.schema("security").rpc("consume_rotated_api_key", { p_key_hash: keyHash, p_tenant_id: parsed.tenantId });
   if (credential.error) throw credential.error;
-  if (!Array.isArray(credential.data) || credential.data.length !== 1 || credential.data[0]?.status !== "active") { securityLog("auth_denied", { requestId }); return json({ error: "UNAUTHORIZED", requestId }, 401, requestId); }
+  if (!Array.isArray(credential.data) || credential.data.length !== 1 || credential.data[0]?.tenant_id !== parsed.tenantId) { securityLog("auth_denied", { requestId }); return json({ error: "UNAUTHORIZED", requestId }, 401, requestId); }
   const tenant = await supabase.schema("security").from("tenants").select("id,status").eq("id", parsed.tenantId).eq("status", "active").maybeSingle();
   if (tenant.error) throw tenant.error;
   if (!tenant.data) return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
