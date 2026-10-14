@@ -113,7 +113,7 @@ export async function readBoundedResponseText(response: Response, maxBytes = MAX
   }
 }
 
-function createBoundedOpenRouterFetcher(timeoutMs: number): Fetcher {
+export function createBoundedOpenRouterFetcher(timeoutMs: number, fetchImpl: typeof fetch = fetch): Fetcher {
   return async (input, init) => {
     let original: Request;
     try {
@@ -141,7 +141,7 @@ function createBoundedOpenRouterFetcher(timeoutMs: number): Fetcher {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const outbound = new Request(original, { redirect: "error", signal });
-      const response = await fetch(outbound);
+      const response = await fetchImpl(outbound);
       const text = await readBoundedResponseText(response, MAX_PROVIDER_RESPONSE_BYTES);
       const headers = new Headers(response.headers);
       // The upstream body has been re-encoded; do not forward stale transport framing.
