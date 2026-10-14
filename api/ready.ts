@@ -1,5 +1,16 @@
-import { supabase } from "../src/db/supabase";
+import { createClient } from "@supabase/supabase-js";
+import { env } from "../src/config/env";
 import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
+
+const readinessClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVER_KEY, {
+  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  global: {
+    fetch: (input, init) => fetch(input, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(3000),
+    }),
+  },
+});
 
 const response = (status: number, body: Record<string, unknown>) => new Response(JSON.stringify(body), {
   status,
@@ -20,7 +31,7 @@ const response = (status: number, body: Record<string, unknown>) => new Response
 export default async function handler(request: Request) {
   if (request.method !== "GET") return response(405, { status: "method_not_allowed" });
   try {
-    const result = await supabase.schema("security").from("tenants").select("id").limit(1);
+    const result = await readinessClient.schema("security").from("tenants").select("id").limit(1);
     if (result.error) throw result.error;
     return response(200, { service: "gainiren-security", status: "ready" });
   } catch (error) {
