@@ -6,6 +6,7 @@ import { checkRateLimit } from "../src/security/rateLimit";
 import { guardedSecurityCheck } from "../src/security/guardedCheck";
 import { securityLog } from "../src/security/observability";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
+import { authenticateRotatedTenantKey } from "../src/security/tenantAuth";
 import { env } from "../src/config/env";
 
 const bodySchema = z.object({ tenantId: z.uuid(), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(), requestId: z.string().min(1).max(200).optional() }).strict();
@@ -32,17 +33,6 @@ async function finalizeIdempotency(tenantId: string, keyHash: string, status: "c
   if (result.error) securityLog("idempotency_finalize_failed", { tenantId, errorCode: result.error.code ?? "SUPABASE_RESPONSE_ERROR" });
 }
 
-async function authenticate(tenantId: string, apiKey: string, keyId: string) {
-  const keyHash = hashValue(apiKey);
-  const rotated = await supabase.schema("security").rpc("consume_rotated_api_key", { p_key_hash: keyHash, p_key_id: keyId || null, p_tenant_id: tenantId });
-  if (rotated.error) throw rotated.error;
-  const match = Array.isArray(rotated.data) ? rotated.data[0] as { tenant_id?: string; key_id?: string } | undefined : undefined;
-  if (!match || match.tenant_id !== tenantId || (keyId && match.key_id !== keyId)) return false;
-  const tenant = await supabase.schema("security").from("tenants").select("id,status").eq("id", tenantId).eq("status", "active").maybeSingle();
-  if (tenant.error) throw tenant.error;
-  return Boolean(tenant.data);
-}
-
 export default async function handler(request: Request) {
   const candidate = request.headers.get("x-request-id") ?? "";
   const requestId = /^[A-Za-z0-9._:-]{1,100}$/.test(candidate) ? candidate : crypto.randomUUID();
@@ -58,7 +48,13 @@ export default async function handler(request: Request) {
     if (new TextEncoder().encode(rawBody).byteLength > 64 * 1024) return json({ error: "PAYLOAD_TOO_LARGE", requestId }, 413, requestId);
     let body: unknown; try { body = JSON.parse(rawBody); } catch { return json({ error: "INVALID_JSON", requestId }, 400, requestId); }
     const parsed = bodySchema.parse(body);
-    if (!(await authenticate(parsed.tenantId, apiKey, request.headers.get("x-gainiren-key-id")?.trim() ?? ""))) return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
+    const keyIdHeader = request.headers.get("x-gainiren-key-id")?.trim() || null;
+    const authentication = await authenticateRotatedTenantKey({
+      tenantId: parsed.tenantId,
+      apiKey,
+      keyId: keyIdHeader,
+    });
+    if (!authentication.authorized) return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
 
     const signature = await verifyAndConsumeRequestSignature({ request, rawBody, apiKey, tenantId: parsed.tenantId });
     if (!signature.valid) { securityLog("request_signature_rejected", { requestId, tenantId: parsed.tenantId, reasonCode: signature.reasonCode }); return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId); }
