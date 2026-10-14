@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { randomUUID } from "node:crypto";
 import { env } from "./src/config/env";
 import healthHandler from "./api/health";
+import readyHandler from "./api/ready";
 import securityCheckHandler from "./api/security-check";
 import securityEventHandler from "./api/security-event";
 import outboxWorkerHandler from "./api/outbox-worker";
@@ -12,6 +13,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 const PORT = Number(process.env.PORT ?? "3000");
 const API_HANDLERS = new Map<string, (request: Request) => Promise<Response> | Response>([
   ["/api/health", healthHandler],
+  ["/api/ready", readyHandler],
   ["/api/security-check", securityCheckHandler],
   ["/api/security-event", securityEventHandler],
   ["/api/outbox-worker", outboxWorkerHandler],
@@ -29,6 +31,9 @@ const DEFAULT_RESPONSE_HEADERS: Record<string, string> = {
   "referrer-policy": "no-referrer",
   "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
   "strict-transport-security": "max-age=31536000; includeSubDomains",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  "cross-origin-resource-policy": "same-site",
+  "x-permitted-cross-domain-policies": "none",
 };
 
 class PayloadTooLargeError extends Error {
@@ -121,7 +126,7 @@ async function handleHttpRequest(incoming: IncomingMessage, outgoing: ServerResp
       writeJson(outgoing, 404, { error: "NOT_FOUND", requestId }, requestId);
       return;
     }
-    if (url.pathname === "/api/health" && method !== "GET") {
+    if ((url.pathname === "/api/health" || url.pathname === "/api/ready") && method !== "GET") {
       writeJson(outgoing, 405, { error: "METHOD_NOT_ALLOWED", requestId }, requestId);
       return;
     }
