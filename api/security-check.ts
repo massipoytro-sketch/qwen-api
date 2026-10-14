@@ -14,7 +14,7 @@ const bodySchema = z.object({
   requestId: z.string().min(1).max(200).optional(),
 });
 
-const json = (body: unknown, status = 200, requestId?: string) => new Response(
+const json = (body: unknown, status = 200, requestId?: string, extraHeaders?: Record<string, string>) => new Response(
   status === 204 ? null : JSON.stringify(body),
   {
     status,
@@ -25,6 +25,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
       "referrer-policy": "no-referrer",
       "x-frame-options": "DENY",
       ...(requestId ? { "x-request-id": requestId } : {}),
+      ...(extraHeaders ?? {}),
       ...(env.SECURITY_API_CORS_ORIGIN ? {
         "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
         "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce",
@@ -34,6 +35,8 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
     },
   },
 );
+
+const decisionRank = { ALLOW: 0, MONITOR: 1, CHALLENGE: 2, REVIEW: 3, BLOCK: 4 } as const;
 
 export default async function handler(request: Request) {
   const requestIdHeader = request.headers.get("x-request-id") ?? "";
@@ -52,22 +55,14 @@ export default async function handler(request: Request) {
   if (!apiKey || apiKey.length > 512) return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
 
   const contentType = (request.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-  if (contentType !== "application/json") {
-    return json({ error: "UNSUPPORTED_MEDIA_TYPE", requestId }, 415, requestId);
-  }
+  if (contentType !== "application/json") return json({ error: "UNSUPPORTED_MEDIA_TYPE", requestId }, 415, requestId);
 
   try {
     const rawBody = await request.text();
-    if (new TextEncoder().encode(rawBody).byteLength > 64 * 1024) {
-      return json({ error: "PAYLOAD_TOO_LARGE", requestId }, 413, requestId);
-    }
+    if (new TextEncoder().encode(rawBody).byteLength > 64 * 1024) return json({ error: "PAYLOAD_TOO_LARGE", requestId }, 413, requestId);
 
     let body: unknown;
-    try {
-      body = JSON.parse(rawBody);
-    } catch {
-      return json({ error: "INVALID_JSON", requestId }, 400, requestId);
-    }
+    try { body = JSON.parse(rawBody); } catch { return json({ error: "INVALID_JSON", requestId }, 400, requestId); }
 
     const parsed = bodySchema.parse(body);
     const keyHash = hashValue(apiKey);
@@ -84,67 +79,60 @@ export default async function handler(request: Request) {
       return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
     }
 
-    const signature = await verifyAndConsumeRequestSignature({
-      request,
-      rawBody,
-      apiKey,
-      tenantId: tenant.data.id,
-    });
+    const signature = await verifyAndConsumeRequestSignature({ request, rawBody, apiKey, tenantId: tenant.data.id });
     if (!signature.valid) {
-      securityLog("request_signature_rejected", {
-        requestId,
-        tenantId: tenant.data.id,
-        reasonCode: signature.reasonCode,
-      });
+      securityLog("request_signature_rejected", { requestId, tenantId: tenant.data.id, reasonCode: signature.reasonCode });
       return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
     }
 
     const rateLimitChecks = await Promise.all([
-      checkRateLimit({
-        tenantId: tenant.data.id,
-        key: `api:${apiKey}`,
-        bucket: "security-check",
-        limit: 60,
-        windowSeconds: 60,
-      }),
-      ...(parsed.subjectId ? [checkRateLimit({
-        tenantId: tenant.data.id,
-        key: `subject:${parsed.subjectId}`,
-        bucket: "security-check-subject",
-        limit: 30,
-        windowSeconds: 60,
-        subjectId: parsed.subjectId,
-      })] : []),
+      checkRateLimit({ tenantId: tenant.data.id, key: `api:${apiKey}`, bucket: "security-check", limit: 60, windowSeconds: 60 }),
+      ...(parsed.subjectId ? [checkRateLimit({ tenantId: tenant.data.id, key: `subject:${parsed.subjectId}`, bucket: "security-check-subject", limit: 30, windowSeconds: 60, subjectId: parsed.subjectId })] : []),
     ]);
     const blockedLimit = rateLimitChecks.find((limit) => !limit.allowed);
-
     if (blockedLimit) {
-      return json({
-        error: "RATE_LIMITED",
-        retryAfter: Math.max(1, Math.ceil((Date.parse(blockedLimit.resetAt) - Date.now()) / 1000)),
-        requestId,
-      }, 429, requestId);
+      return json({ error: "RATE_LIMITED", retryAfter: Math.max(1, Math.ceil((Date.parse(blockedLimit.resetAt) - Date.now()) / 1000)), requestId }, 429, requestId);
     }
 
-    const result = await securityCheck({
-      tenantId: tenant.data.id,
-      subjectId: parsed.subjectId,
-      sessionId: parsed.sessionId,
-      requestId,
-    });
+    const runtime = await supabase.schema("security").rpc("get_runtime_control", { p_tenant_id: tenant.data.id });
+    if (runtime.error) throw runtime.error;
+    const runtimeControl = runtime.data as { mode?: string; reasonCode?: string; version?: number; expiresAt?: string | null };
+    const mode = runtimeControl.mode ?? "normal";
+    const reasonCode = typeof runtimeControl.reasonCode === "string" ? runtimeControl.reasonCode : "RUNTIME_CONTROL";
+    const controlVersion = Number.isFinite(Number(runtimeControl.version)) ? Number(runtimeControl.version) : 0;
 
-    return json({ ...result, requestId }, 200, requestId);
+    if (mode === "lockdown") {
+      securityLog("runtime_lockdown_block", { requestId, tenantId: tenant.data.id, reasonCode, controlVersion });
+      return json({
+        decision: "BLOCK",
+        score: 100,
+        riskLevel: "critical",
+        challengeRecommendation: null,
+        runtimeControl: { mode, reasonCode, version: controlVersion },
+        requestId,
+      }, 200, requestId, { "x-gainiren-runtime-control": "lockdown" });
+    }
+
+    const result = await securityCheck({ tenantId: tenant.data.id, subjectId: parsed.subjectId, sessionId: parsed.sessionId, requestId });
+    if (mode === "review_only" && decisionRank[result.decision] < decisionRank.REVIEW) {
+      securityLog("runtime_review_only_escalation", { requestId, tenantId: tenant.data.id, reasonCode, controlVersion });
+      return json({
+        ...result,
+        decision: "REVIEW",
+        score: Math.max(70, result.score),
+        riskLevel: "high",
+        runtimeControl: { mode, reasonCode, version: controlVersion },
+        requestId,
+      }, 200, requestId, { "x-gainiren-runtime-control": "review_only" });
+    }
+
+    return json({ ...result, runtimeControl: { mode, reasonCode, version: controlVersion }, requestId }, 200, requestId);
   } catch (error) {
     if (error instanceof Error && ["SUBJECT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_SUBJECT_MISMATCH", "SESSION_NOT_ACTIVE"].includes(error.message)) {
       return json({ error: "INVALID_CONTEXT", requestId }, 400, requestId);
     }
-    if (error instanceof z.ZodError) {
-      return json({ error: "INVALID_REQUEST", requestId }, 400, requestId);
-    }
-    securityLog("api_error", {
-      requestId,
-      errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR",
-    });
+    if (error instanceof z.ZodError) return json({ error: "INVALID_REQUEST", requestId }, 400, requestId);
+    securityLog("api_error", { requestId, errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR" });
     return json({ error: "INTERNAL_ERROR", requestId }, 500, requestId);
   }
 }
