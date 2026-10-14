@@ -116,7 +116,7 @@ def auth_headers(body: str, path: str = "/api/security-check") -> dict[str, str]
     if KEY_ID:
         fields.append(KEY_ID)
     fields.append(body_hash)
-    canonical = "\\n".join(fields)
+    canonical = "\n".join(fields)
     signature = hmac.new(API_KEY.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
     headers = {
         "authorization": f"Bearer {API_KEY}",
@@ -172,15 +172,12 @@ def main() -> int:
     results.append(check("content-type enforcement", status, {415}))
 
     oversized = "{" + "\"tenantId\":\"" + TENANT_ID + "\"," + "\"x\":" + "\"A\"" * 70_000 + "}"
-    status, _ = request("/api/security-check", oversized, auth_headers())
+    status, _ = request("/api/security-check", oversized, {"authorization": f"Bearer {API_KEY}", "content-type": "application/json"})
     results.append(check("oversized body", status, {413}))
 
     def burst(_: int) -> int:
-        status, _ = request(
-            "/api/security-check",
-            body := json.dumps({"tenantId": TENANT_ID, "requestId": f"redteam-{time.time_ns()}"}, separators=(",", ":")),
-            auth_headers(body),
-        )
+        body = json.dumps({"tenantId": TENANT_ID, "requestId": f"redteam-{time.time_ns()}"}, separators=(",", ":"))
+        status, _ = request("/api/security-check", body, auth_headers(body))
         return status
 
     with ThreadPoolExecutor(max_workers=10) as pool:
