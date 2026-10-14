@@ -30,6 +30,9 @@ async function check(name, path, init, validate) {
 await check("health endpoint", "/api/health", { method: "GET" },
   (r, b) => r.status === 200 && b?.service === "gainiren-security" && b?.status === "ok");
 
+await check("database readiness endpoint", "/api/ready", { method: "GET" },
+  (r, b) => r.status === 200 && b?.service === "gainiren-security" && b?.status === "ready");
+
 await check("security-check rejects missing auth", "/api/security-check", {
   method: "POST", headers: { "content-type": "application/json" }, body: "{}",
 }, (r, b) => r.status === 401 && b?.error === "UNAUTHORIZED");
