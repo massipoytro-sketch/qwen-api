@@ -9,6 +9,7 @@ import { analyzeAccountTakeoverSignals, analyzeConcurrentSessionAnomalies } from
 import { analyzeAdvancedBotSignals, evaluateTenantPolicies, getBehaviorBaselineScore, ensureInvestigationCase, enqueueSecurityEvent, upsertFraudCluster } from "./platform";
 import { evaluateDefenseInDepth, scoreFloorForDecision } from "./firewall";
 import type { SecurityCheckInput, SecurityCheckResult, SecurityDecision } from "./types";
+import { aggregateSecurityRisk as aggregateRisk } from "./risk";
 
 const inputSchema = z.object({
   tenantId: z.uuid(), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(), requestId: z.string().min(1).max(200).optional(),
@@ -18,13 +19,7 @@ const riskLevelFor = (score: number): RiskLevel => score >= 90 ? "critical" : sc
 const decisionFor = (score: number): SecurityDecision => score >= 90 ? "BLOCK" : score >= 70 ? "REVIEW" : score >= 40 ? "CHALLENGE" : score > 0 ? "MONITOR" : "ALLOW";
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 type Signal = { signalName: string; source: string; score: number; confidence: number | null; evidence: Record<string, unknown> };
-const aggregateRisk = (signals: Signal[]) => {
-  if (!signals.length) return 0;
-  const weighted = signals.reduce((total, signal) => total + signal.score * (signal.confidence ?? 0.5), 0);
-  const sourceBonus = Math.min(15, Math.max(0, new Set(signals.map((s) => s.source)).size - 1) * 5);
-  const highSignalBonus = signals.filter((s) => s.score >= 70).length >= 2 ? 10 : 0;
-  return clamp(Math.round(Math.min(100, weighted * 0.55 + sourceBonus + highSignalBonus)));
-};
+
 
 export async function securityCheck(rawInput: SecurityCheckInput): Promise<SecurityCheckResult> {
   const input = inputSchema.parse(rawInput);
