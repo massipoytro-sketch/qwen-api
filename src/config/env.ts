@@ -37,3 +37,12 @@ export const env = envSchema.parse({
   HONEY_TENANT_ID: process.env.HONEY_TENANT_ID,
   SECURITY_OPS_TOKEN: process.env.SECURITY_OPS_TOKEN,
 });
+
+// Compatibility surface for the existing deterministic security-check pipeline.
+// Values are derived from OpenRouter and are never logged or exposed to clients.
+Object.assign(env, {
+  AI_ANALYZER_ENABLED: env.OPENROUTER_ENABLED,
+  AI_ANALYZER_ENDPOINT: "https://openrouter.ai/api/v1/chat/completions",
+  AI_ANALYZER_API_KEY: env.OPENROUTER_API_KEY,
+  AI_ANALYZER_MODEL: env.OPENROUTER_MODEL,
+});
