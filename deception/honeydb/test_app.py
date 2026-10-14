@@ -7,7 +7,7 @@ os.environ["HONEY_HASH_KEY"] = "unit-test-honey-hash-key-0123456789-abcdef"
 os.environ.pop("SECURITY_ALERT_URL", None)
 os.environ.pop("HONEY_SENSOR_TOKEN", None)
 
-from app import app, hash_field  # noqa: E402
+from app import app, classify_path, hash_field  # noqa: E402
 
 
 class HoneyDbTests(unittest.TestCase):
@@ -46,6 +46,29 @@ class HoneyDbTests(unittest.TestCase):
         self.assertIn("synthetic backup", body)
         self.assertIn("admin@example.invalid", body)
         self.assertNotIn("CREATE ROLE", body.upper())
+
+    def test_cloud_credential_canary_is_explicitly_synthetic(self):
+        response = self.client.get("/.aws/credentials")
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("HONEY-CANARY-NOT-A-CREDENTIAL", body)
+        self.assertIn("SYNTHETIC_ONLY", body)
+        self.assertNotIn("AKIA", body)
+
+    def test_actuator_and_export_canaries_do_not_use_real_data(self):
+        actuator = self.client.get("/actuator/env")
+        export = self.client.get("/backup/users.csv")
+        self.assertEqual(actuator.status_code, 200)
+        self.assertEqual(actuator.get_json()["dataset"] if "dataset" in actuator.get_json() else "SYNTHETIC_ONLY", "SYNTHETIC_ONLY")
+        self.assertEqual(export.status_code, 200)
+        self.assertIn("admin@example.invalid", export.get_data(as_text=True))
+        self.assertIn("SYNTHETIC_ONLY", export.get_data(as_text=True))
+
+    def test_new_decoy_paths_are_classified_for_alerting(self):
+        self.assertEqual(classify_path("/.aws/credentials"), ("environment", "cloud_credentials"))
+        self.assertEqual(classify_path("/actuator/env"), ("debug", "actuator_environment"))
+        self.assertEqual(classify_path("/backup/users.csv"), ("backup", "user_export"))
+        self.assertEqual(classify_path("/graphql"), ("api_probe", "graphql_probe"))
 
     def test_oversized_request_is_rejected(self):
         response = self.client.post("/admin/login", data=b"x" * (9 * 1024))
