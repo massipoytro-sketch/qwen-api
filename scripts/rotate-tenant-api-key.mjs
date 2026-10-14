@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
+import { assertSecurityProjectUrl } from "./lib/assert-security-project.mjs";
 const [tenantId, labelArg = "rotated-key", graceArg = "3600"] = process.argv.slice(2);
 const url = process.env.SUPABASE_URL;
 const serverKey = process.env.SUPABASE_SERVER_KEY;
@@ -17,6 +18,13 @@ if (!url || !serverKey) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVER_KEY. Never place secrets in Git or client code.");
   process.exit(2);
 }
+try {
+  assertSecurityProjectUrl(url);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Refusing database target.");
+  process.exit(2);
+}
+
 if (process.env.CONFIRM_KEY_ROTATION !== "YES") {
   console.error("Refusing to rotate keys. Set CONFIRM_KEY_ROTATION=YES after confirming the target tenant.");
   process.exit(2);
