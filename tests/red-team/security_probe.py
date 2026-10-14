@@ -7,8 +7,11 @@ It must only be pointed at a service owned/authorized by the operator.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +23,7 @@ ACK = "I_OWN_THIS_SERVICE"
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 TENANT_ID = os.environ.get("TENANT_ID", "")
 API_KEY = os.environ.get("API_KEY", "")
+KEY_ID = os.environ.get("KEY_ID", "").strip()
 WRONG_TENANT_ID = os.environ.get("WRONG_TENANT_ID", "00000000-0000-0000-0000-000000000000")
 ALLOWED_TARGET_ORIGIN = os.environ.get("ALLOWED_TARGET_ORIGIN", "").rstrip("/")
 
@@ -97,12 +101,34 @@ def request(path: str, body: str | None, headers: dict[str, str] | None = None) 
         return 599, {"error": str(exc.reason)}
 
 
-def auth_headers() -> dict[str, str]:
-    return {
+def auth_headers(body: str, path: str = "/api/security-check") -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_urlsafe(24)
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    version = "v2" if KEY_ID else "v1"
+    fields = [
+        f"GAINIREN-REQUEST-{version.upper()}",
+        "POST",
+        path,
+        timestamp,
+        nonce,
+    ]
+    if KEY_ID:
+        fields.append(KEY_ID)
+    fields.append(body_hash)
+    canonical = "\\n".join(fields)
+    signature = hmac.new(API_KEY.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    headers = {
         "authorization": f"Bearer {API_KEY}",
         "content-type": "application/json",
         "x-request-id": f"redteam-{time.time_ns()}",
+        "x-gainiren-timestamp": timestamp,
+        "x-gainiren-nonce": nonce,
+        "x-gainiren-signature": f"{version}={signature}",
     }
+    if KEY_ID:
+        headers["x-gainiren-key-id"] = KEY_ID
+    return headers
 
 
 def check(name: str, status: int, expected: set[int]) -> dict:
@@ -115,24 +141,26 @@ def main() -> int:
     require_config()
     results = []
 
+    baseline_body = json.dumps({"tenantId": TENANT_ID, "requestId": "redteam-baseline"}, separators=(",", ":"))
     status, _ = request(
         "/api/security-check",
-        json.dumps({"tenantId": TENANT_ID, "requestId": "redteam-baseline"}),
-        auth_headers(),
+        baseline_body,
+        auth_headers(baseline_body),
     )
     results.append(check("baseline authenticated request", status, {200, 429}))
 
     status, _ = request(
         "/api/security-check",
         '{"tenantId":',
-        auth_headers(),
+        {"authorization": f"Bearer {API_KEY}", "content-type": "application/json"},
     )
     results.append(check("malformed JSON", status, {400}))
 
+    wrong_tenant_body = json.dumps({"tenantId": WRONG_TENANT_ID, "requestId": "redteam-isolation"}, separators=(",", ":"))
     status, _ = request(
         "/api/security-check",
-        json.dumps({"tenantId": WRONG_TENANT_ID, "requestId": "redteam-isolation"}),
-        auth_headers(),
+        wrong_tenant_body,
+        auth_headers(wrong_tenant_body),
     )
     results.append(check("tenant isolation", status, {401}))
 
@@ -150,8 +178,8 @@ def main() -> int:
     def burst(_: int) -> int:
         status, _ = request(
             "/api/security-check",
-            json.dumps({"tenantId": TENANT_ID}),
-            auth_headers(),
+            body := json.dumps({"tenantId": TENANT_ID, "requestId": f"redteam-{time.time_ns()}"}, separators=(",", ":")),
+            auth_headers(body),
         )
         return status
 
