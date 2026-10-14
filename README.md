@@ -17,6 +17,12 @@ Open-source, modular security and fraud-intelligence platform for web applicatio
 - Analytics
 - API and SDK integration for client applications
 
+## Security hardening roadmap
+
+- [Part 2 — Defense in depth](docs/PART_2_DEFENSE_IN_DEPTH.md)
+- [Part 3 — Key lifecycle and validation readiness](docs/PART_3_RESILIENCE_AND_VALIDATION.md)
+- [Signed API requests](docs/REQUEST_SIGNING.md)
+
 ## Architecture
 
 The project is designed as a defense-in-depth system. No single fingerprint, IP signal, browser signal, rule, or AI model should be trusted as the only source of truth.
