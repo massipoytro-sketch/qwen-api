@@ -46,7 +46,7 @@ create or replace function security.rotate_tenant_api_key(
   p_label text default 'rotated-key',
   p_grace_seconds integer default 3600
 )
-returns table (key_id uuid, previous_keys_moved_to_grace integer)
+returns table (key_id uuid, previous_active_keys_retired integer)
 language plpgsql
 security definer
 set search_path = ''
@@ -119,5 +119,103 @@ revoke all on function security.rotate_tenant_api_key(uuid,text,text,integer) fr
 revoke all on function security.revoke_tenant_api_key(uuid,uuid) from public, anon, authenticated;
 grant execute on function security.rotate_tenant_api_key(uuid,text,text,integer) to service_role;
 grant execute on function security.revoke_tenant_api_key(uuid,uuid) to service_role;
+
+ 
+create or replace function security.verify_security_audit_ledger(
+  p_tenant_id uuid,
+  p_max_rows integer default 10000
+)
+returns table (
+  valid boolean,
+  checked_entries integer,
+  first_invalid_sequence bigint,
+  reason_code text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v_row record;
+  v_count bigint;
+  v_expected_sequence bigint := 1;
+  v_previous_hash text := null;
+  v_payload jsonb;
+  v_expected_hash text;
+  v_checked integer := 0;
+begin
+  if p_tenant_id is null or p_max_rows not between 1 and 50000 then
+    raise exception 'INVALID_AUDIT_LEDGER_VERIFY_INPUT' using errcode = '22023';
+  end if;
+
+  if not exists (
+    select 1 from security.tenants t
+    where t.id = p_tenant_id and t.status = 'active'
+  ) then
+    raise exception 'TENANT_NOT_ACTIVE' using errcode = '42501';
+  end if;
+
+  select count(*) into v_count
+  from security.audit_ledger l
+  where l.tenant_id = p_tenant_id;
+
+  if v_count > p_max_rows then
+    return query select false, 0, null::bigint, 'ROW_LIMIT_EXCEEDED'::text;
+    return;
+  end if;
+
+  for v_row in
+    select l.ledger_id, l.sequence_no, l.action, l.actor_type,
+           l.resource_type, l.resource_id, l.request_id, l.details,
+           l.previous_hash, l.entry_hash, l.created_at
+    from security.audit_ledger l
+    where l.tenant_id = p_tenant_id
+    order by l.sequence_no asc
+  loop
+    if v_row.sequence_no <> v_expected_sequence then
+      return query select false, v_checked, v_row.sequence_no, 'SEQUENCE_GAP'::text;
+      return;
+    end if;
+    if v_row.previous_hash is distinct from v_previous_hash then
+      return query select false, v_checked, v_row.sequence_no, 'PREVIOUS_HASH_MISMATCH'::text;
+      return;
+    end if;
+
+    v_payload := pg_catalog.jsonb_build_object(
+      'tenantId', p_tenant_id,
+      'sequenceNo', v_row.sequence_no,
+      'action', v_row.action,
+      'actorType', v_row.actor_type,
+      'resourceType', v_row.resource_type,
+      'resourceId', v_row.resource_id,
+      'requestId', v_row.request_id,
+      'details', v_row.details,
+      'previousHash', v_row.previous_hash,
+      'createdAt', v_row.created_at
+    );
+    v_expected_hash := pg_catalog.encode(
+      extensions.digest(
+        pg_catalog.convert_to(coalesce(v_row.previous_hash, 'GENESIS') || E'\n' || v_payload::text, 'UTF8'),
+        'sha256'
+      ),
+      'hex'
+    );
+
+    if v_expected_hash is distinct from v_row.entry_hash then
+      return query select false, v_checked, v_row.sequence_no, 'ENTRY_HASH_MISMATCH'::text;
+      return;
+    end if;
+
+    v_previous_hash := v_row.entry_hash;
+    v_expected_sequence := v_expected_sequence + 1;
+    v_checked := v_checked + 1;
+  end loop;
+
+  return query select true, v_checked, null::bigint, 'OK'::text;
+end;
+$function$;
+
+revoke all on function security.verify_security_audit_ledger(uuid,integer) from public, anon, authenticated;
+grant execute on function security.verify_security_audit_ledger(uuid,integer) to service_role;
 
 commit;
