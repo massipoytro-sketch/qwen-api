@@ -218,4 +218,45 @@ $function$;
 revoke all on function security.verify_security_audit_ledger(uuid,integer) from public, anon, authenticated;
 grant execute on function security.verify_security_audit_ledger(uuid,integer) to service_role;
 
+
+create or replace function security.retire_legacy_tenant_api_key(
+  p_tenant_id uuid
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v_count integer;
+begin
+  if p_tenant_id is null then
+    raise exception 'INVALID_TENANT_ID' using errcode = '22023';
+  end if;
+  if not exists (
+    select 1 from security.tenants t
+    where t.id = p_tenant_id and t.status = 'active'
+  ) then
+    raise exception 'TENANT_NOT_ACTIVE' using errcode = '42501';
+  end if;
+  if not exists (
+    select 1 from security.tenant_api_keys k
+    where k.tenant_id = p_tenant_id
+      and k.status = 'active'
+      and k.valid_from <= pg_catalog.now()
+      and (k.expires_at is null or k.expires_at > pg_catalog.now())
+  ) then
+    raise exception 'ACTIVE_MANAGED_KEY_REQUIRED' using errcode = '22023';
+  end if;
+
+  update security.tenants t set api_key_hash = null, updated_at = pg_catalog.now()
+  where t.id = p_tenant_id and t.api_key_hash is not null;
+  get diagnostics v_count = row_count;
+  return v_count = 1;
+end;
+$function$;
+
+revoke all on function security.retire_legacy_tenant_api_key(uuid) from public, anon, authenticated;
+grant execute on function security.retire_legacy_tenant_api_key(uuid) to service_role;
+
 commit;
