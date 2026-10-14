@@ -46,7 +46,7 @@ create or replace function security.rotate_tenant_api_key(
   p_label text default 'rotated-key',
   p_grace_seconds integer default 3600
 )
-returns table (key_id uuid, previous_active_keys_updated integer)
+returns table (key_id uuid, previous_active_keys_retired integer)
 language plpgsql
 security definer
 set search_path = ''
