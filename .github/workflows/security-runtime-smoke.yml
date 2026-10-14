@@ -32,7 +32,7 @@ jobs:
 
       - name: Start and test HTTP runtime
         env:
-          SUPABASE_URL: https://ci-placeholder.supabase.co
+          SUPABASE_URL: https://127.0.0.1:1
           SUPABASE_SERVER_KEY: ci-placeholder-not-a-real-secret
           PORT: "3210"
           NODE_ENV: test
@@ -53,6 +53,12 @@ jobs:
           test "$ready" -eq 1
           grep -q '"service":"gainiren-security"' /tmp/gainiren-health.json
           grep -q '"status":"ok"' /tmp/gainiren-health.json
+
+          # Liveness must remain up even when the dedicated database is unreachable.
+          code=$(curl --silent --max-time 5 --output /tmp/gainiren-ready.json --write-out '%{http_code}' \
+            http://127.0.0.1:3210/api/ready)
+          test "$code" = "503"
+          grep -q '"status":"not_ready"' /tmp/gainiren-ready.json
 
           code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request POST --header 'Content-Type: application/json' \
