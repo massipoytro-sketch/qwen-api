@@ -67,7 +67,7 @@ function signedHeaders(body, nonce, timestamp) {
     nonce,
     ...(keyId ? [keyId] : []),
     crypto.sha256(body, "hex"),
-  ].join("\\n");
+  ].join("\n");
   const signature = crypto.hmac("sha256", apiKey, canonical, "hex");
   return {
     authorization: `Bearer ${apiKey}`,
