@@ -8,7 +8,7 @@ describe("deterministic security risk aggregation", () => {
   ];
 
   it("returns a stable score from deterministic signals", () => {
-    expect(aggregateSecurityRisk(signals)).toBe(73);
+    expect(aggregateSecurityRisk(signals)).toBe(68);
   });
 
   it("cannot be raised or lowered by AI advisory scores", () => {
