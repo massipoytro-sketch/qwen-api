@@ -49,7 +49,7 @@ console.log(JSON.stringify({
   keyId: row.key_id,
   label: labelArg,
   graceSeconds,
-  oldActiveKeysRetired: row.previous_active_keys_retired,
+  oldActiveKeysUpdated: row.previous_active_keys_updated,
   apiKey,
   requiredHeaders: {
     authorization: "Bearer <apiKey>",
