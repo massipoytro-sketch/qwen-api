@@ -1,9 +1,11 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
+import crypto from "k6/crypto";
 
 const baseUrl = (__ENV.BASE_URL || "").replace(/\/+$/, "");
 const tenantId = __ENV.TENANT_ID || "";
 const apiKey = __ENV.API_KEY || "";
+const keyId = __ENV.KEY_ID || "";
 const ack = __ENV.LOAD_TEST_ACK || "";
 const profile = __ENV.LOAD_PROFILE || "smoke";
 const allowedOrigin = (__ENV.ALLOWED_TARGET_ORIGIN || "").replace(/\/+$/, "");
@@ -49,15 +51,43 @@ export const options = profile === "stress"
       thresholds: { http_req_duration: ["p(95)<2000"] },
     };
 
+function randomNonce() {
+  const bytes = new Uint8Array(crypto.randomBytes(24));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function signedHeaders(body, nonce, timestamp) {
+  const path = "/api/security-check";
+  const version = keyId ? "v2" : "v1";
+  const canonical = [
+    `GAINIREN-REQUEST-${version.toUpperCase()}`,
+    "POST",
+    path,
+    timestamp,
+    nonce,
+    ...(keyId ? [keyId] : []),
+    crypto.sha256(body, "hex"),
+  ].join("\\n");
+  const signature = crypto.hmac("sha256", apiKey, canonical, "hex");
+  return {
+    authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "X-GainiRen-Timestamp": timestamp,
+    "X-GainiRen-Nonce": nonce,
+    "X-GainiRen-Signature": `${version}=${signature}`,
+    ...(keyId ? { "X-GainiRen-Key-Id": keyId } : {}),
+  };
+}
+
 export default function () {
+  const body = JSON.stringify({ tenantId, requestId: `k6-${__VU}-${__ITER}-${Date.now()}` });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const nonce = randomNonce();
   const response = http.post(
     `${baseUrl}/api/security-check`,
-    JSON.stringify({ tenantId, requestId: `k6-${__VU}-${__ITER}-${Date.now()}` }),
+    body,
     {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: signedHeaders(body, nonce, timestamp),
       timeout: "10s",
       redirects: 0,
       tags: { endpoint: "security-check", profile },
