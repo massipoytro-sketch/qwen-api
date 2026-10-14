@@ -144,7 +144,7 @@ declare
   v_expected_hash text;
   v_checked integer := 0;
 begin
-  if p_tenant_id is null or p_max_rows not between 1 and 50000 then
+  if p_tenant_id is null or p_max_rows is null or p_max_rows not between 1 and 50000 then
     raise exception 'INVALID_AUDIT_LEDGER_VERIFY_INPUT' using errcode = '22023';
   end if;
 
