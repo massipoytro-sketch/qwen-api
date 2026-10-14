@@ -99,18 +99,29 @@ export default async function handler(request: Request) {
       return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
     }
 
-    const limit = await checkRateLimit({
-      tenantId: tenant.data.id,
-      key: `api:${apiKey}`,
-      bucket: "security-check",
-      limit: 60,
-      windowSeconds: 60,
-    });
+    const rateLimitChecks = await Promise.all([
+      checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `api:${apiKey}`,
+        bucket: "security-check",
+        limit: 60,
+        windowSeconds: 60,
+      }),
+      ...(parsed.subjectId ? [checkRateLimit({
+        tenantId: tenant.data.id,
+        key: `subject:${parsed.subjectId}`,
+        bucket: "security-check-subject",
+        limit: 30,
+        windowSeconds: 60,
+        subjectId: parsed.subjectId,
+      })] : []),
+    ]);
+    const blockedLimit = rateLimitChecks.find((limit) => !limit.allowed);
 
-    if (!limit.allowed) {
+    if (blockedLimit) {
       return json({
         error: "RATE_LIMITED",
-        retryAfter: Math.max(1, Math.ceil((new Date(limit.resetAt ?? new Date(Date.now() + 60_000).toISOString()).getTime() - Date.now()) / 1000)),
+        retryAfter: Math.max(1, Math.ceil((Date.parse(blockedLimit.resetAt) - Date.now()) / 1000)),
         requestId,
       }, 429, requestId);
     }
