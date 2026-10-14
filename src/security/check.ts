@@ -299,6 +299,34 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     });
     if (auditInsert.error) throw auditInsert.error;
   }
+  const ledgerAppend = await supabase.schema("security").rpc("append_security_ledger_entry", {
+    p_tenant_id: input.tenantId,
+    p_action: "risk_assessment_decided",
+    p_resource_type: "risk_assessment",
+    p_resource_id: assessmentInsert.data.id,
+    p_request_id: input.requestId ?? null,
+    p_actor_type: "system",
+    p_details: {
+      subjectId: input.subjectId ?? null,
+      sessionId: input.sessionId ?? null,
+      decision,
+      score,
+      riskLevel,
+      assessmentVersion: "defense-in-depth-v1",
+      firewallMinimumDecision: firewallResult.minimumDecision,
+      firewallReasonCodes: firewallResult.reasonCodes,
+      signalNames: finalSignals.map((signal) => signal.signalName).slice(0, 128),
+    },
+  });
+  if (ledgerAppend.error) {
+    securityLog("security_ledger_append_failed", {
+      requestId: input.requestId ?? null,
+      tenantId: input.tenantId,
+      errorCode: safeErrorCode(ledgerAppend.error),
+      ...(safeErrorStatus(ledgerAppend.error) ? { errorStatus: safeErrorStatus(ledgerAppend.error) } : {}),
+    });
+    throw new Error("SECURITY_LEDGER_APPEND_FAILED");
+  }
   const backgroundTasks: Promise<unknown>[] = [
     enqueueSecurityEvent({
       tenantId: input.tenantId,
