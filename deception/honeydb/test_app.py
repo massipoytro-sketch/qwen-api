@@ -59,10 +59,17 @@ class HoneyDbTests(unittest.TestCase):
         actuator = self.client.get("/actuator/env")
         export = self.client.get("/backup/users.csv")
         self.assertEqual(actuator.status_code, 200)
-        self.assertEqual(actuator.get_json()["dataset"] if "dataset" in actuator.get_json() else "SYNTHETIC_ONLY", "SYNTHETIC_ONLY")
+        self.assertEqual(actuator.get_json()["dataset"], "SYNTHETIC_ONLY")
         self.assertEqual(export.status_code, 200)
         self.assertIn("admin@example.invalid", export.get_data(as_text=True))
         self.assertIn("SYNTHETIC_ONLY", export.get_data(as_text=True))
+
+    def test_graphql_tripwire_returns_only_a_synthetic_marker(self):
+        response = self.client.post("/graphql", json={"query": "{ users { email } }"})
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["dataset"], "SYNTHETIC_ONLY")
+        self.assertEqual(body["errors"][0]["extensions"]["code"], "HONEYDB_CANARY")
 
     def test_new_decoy_paths_are_classified_for_alerting(self):
         self.assertEqual(classify_path("/.aws/credentials"), ("environment", "cloud_credentials"))
