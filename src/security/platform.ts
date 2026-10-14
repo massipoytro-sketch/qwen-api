@@ -665,6 +665,7 @@ export async function analyzeWithDuckDB(rawInput: {
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify(safePayload),
       signal: controller.signal,
+      redirect: "error",
     });
     if (!response.ok) throw new Error(`DUCKDB_ANALYTICS_HTTP_${response.status}`);
     const reader = response.body?.getReader();
