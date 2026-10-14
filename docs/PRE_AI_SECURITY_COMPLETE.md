@@ -35,7 +35,7 @@ The security audit ledger uses per-tenant sequence numbers and SHA-256 previous-
 
 ## AI boundary
 
-AI is disabled by default. The deterministic engine remains authoritative. A later AI phase may add an advisory analyst such as an OpenRouter-hosted Nemotron model, but AI cannot reduce a deterministic decision, bypass authentication, or write authoritative security state.
+AI is disabled by default. The deterministic engine remains authoritative. The optional OpenRouter SDK integration is now implemented with AI disabled by default. It sends only bounded categorical/numeric evidence and is stored as advisory output; it cannot affect risk aggregation, bypass authentication, or write authoritative security decisions. Enable it only after setting the OpenRouter key in Render Secrets and completing synthetic prompt-injection, malformed-output, timeout, and provider-failure tests.
 
 ## Database boundary
 
