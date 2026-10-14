@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { env } from "./src/config/env";
 import { isSecureTransport, securityHeaders } from "./src/security/transport";
 import healthHandler from "./api/health";
-import securityCheckHandler from "./api/security-check";
+import securityCheckHandler from "./api/security-check-guarded";
 import securityEventHandler from "./api/security-event";
 import outboxWorkerHandler from "./api/outbox-worker";
 import honeyAlertHandler from "./api/honey-alert";
@@ -64,11 +64,11 @@ async function handleHttpRequest(incoming: IncomingMessage, outgoing: ServerResp
     const handler = API_HANDLERS.get(url.pathname);
     if (!handler) { writeJson(outgoing, 404, { error: "NOT_FOUND", requestId }, requestId); return; }
     if (url.pathname === "/api/health" && method !== "GET") { writeJson(outgoing, 405, { error: "METHOD_NOT_ALLOWED", requestId }, requestId); return; }
+    const body = await readBoundedBody(incoming);
+    if ((method === "GET" || method === "HEAD") && body.byteLength > 0) { writeJson(outgoing, 400, { error: "BODY_NOT_ALLOWED", requestId }, requestId); return; }
     const requestHeaders = getRequestHeaders(incoming);
-    const apiRequest = new Request(url, { method, headers: requestHeaders, ...(method === "GET" || method === "HEAD" ? {} : { body: new Uint8Array(await readBoundedBody(incoming)) }) });
+    const apiRequest = new Request(url, { method, headers: requestHeaders, ...(method === "GET" || method === "HEAD" ? {} : { body: new Uint8Array(body) }) });
     if (env.NODE_ENV === "production" && url.pathname !== "/api/health" && !isSecureTransport(apiRequest)) { writeJson(outgoing, 400, { error: "TLS_REQUIRED", requestId }, requestId); return; }
-    const body = method === "GET" || method === "HEAD" ? new Uint8Array() : new Uint8Array();
-    void body;
     const apiResponse = await handler(apiRequest);
     outgoing.statusCode = apiResponse.status;
     for (const [name, value] of Object.entries(DEFAULT_RESPONSE_HEADERS)) outgoing.setHeader(name, value);
