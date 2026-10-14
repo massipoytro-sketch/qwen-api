@@ -29,7 +29,7 @@ const securityControlSchema = z.object({
 
 const runtimeControlSchema = z.object({
   mode: z.enum(["normal", "review_only", "lockdown"]),
-  reasonCode: z.string().max(100),
+  reasonCode: z.string().min(1).max(80).regex(/^[A-Za-z0-9_.:-]+$/),
   version: z.number().finite(),
   expiresAt: z.string().datetime().nullable().optional(),
 }).passthrough();
@@ -290,13 +290,13 @@ export default async function handler(request: Request) {
         riskLevel: result.score >= 90 ? "critical" : "medium",
         challengeRecommendation: {
           type: "risk_based_verification",
-          reasonCodes: ["TENANT_CHALLENGE_ALL", ...(current?.reason_code ? [current.reason_code] : [])],
+          reasonCodes: ["TENANT_CHALLENGE_ALL", controlReason],
           expiresInSeconds: 300,
         },
       };
       enforcementSource = "tenant_challenge_all";
       enforcedReasons.push("TENANT_CHALLENGE_ALL");
-      if (current?.reason_code) enforcedReasons.push(current.reason_code);
+      enforcedReasons.push(controlReason);
     } else if (controlMode === "challenge_all") {
       enforcementSource = "tenant_challenge_all";
       enforcedReasons.push("TENANT_CHALLENGE_ALL");
