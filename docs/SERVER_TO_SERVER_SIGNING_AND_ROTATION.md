@@ -24,6 +24,7 @@ Send headers:
 - `X-GainiRen-Timestamp: <unix-seconds>`
 - `X-GainiRen-Nonce: <fresh-random-value>`
 - `X-GainiRen-Signature: v1=<64-lowercase-hex-digest>`
+- Optional `X-GainiRen-Key-Id: <registered-key-uuid>` to pin authentication to one registered key.
 
 The API checks the HMAC in constant time, rejects timestamps outside a five-minute window, then atomically consumes the nonce in Postgres. Reusing the nonce is rejected, including concurrent replay attempts. A new signature is required for every retry; do not blindly resend the same signed request.
 
@@ -77,16 +78,16 @@ export async function requestSecurityCheck({ tenantId, subjectId, sessionId }) {
 
 ## Controlled key rotation
 
-The dedicated security database stores SHA-256 hashes, not plaintext API keys. Rotation is performed through `security.rotate_tenant_api_key(uuid,text,integer)`, executable only by `service_role`.
+The canonical registry is `security.tenant_api_keys`; do not rotate keys by editing `security.tenants`.
 
 1. Generate a new random API key in a trusted operator environment; do not send it through chat or commit it.
 2. Compute lowercase SHA-256 hex of the new key.
 3. Update the GainiRen backend secret manager with the new key and verify the caller is ready to use it.
-4. Call the rotation RPC with the tenant UUID, new 64-character hash, and a short grace window (default 900 seconds, maximum 86400; use 0 for immediate revocation).
-5. During the grace window, both the new key and old key are accepted; the old key stops working automatically at expiry. A rotation to zero grace immediately clears the previous key.
-6. Confirm successful signed requests using the new key. Revoke/replace the key immediately if compromise is suspected.
+4. Call `security.rotate_tenant_api_key(p_tenant_id, p_key_hash, p_label, p_grace_seconds)` using a trusted server-side Supabase service-role context. Use a short grace window (default 3600 seconds, maximum 86400); use 0 for immediate revocation.
+5. During the grace window, the prior active key becomes `grace` and the new key becomes `active`. The prior key stops working automatically at expiry. A zero-second grace window revokes the previous key immediately.
+6. Confirm signed requests with the new key and, when desired, send its registered key UUID in `X-GainiRen-Key-Id`. Replace the key immediately if compromise is suspected.
 
-The database writes a ledger entry for each successful rotation. The RPC does not return or store the plaintext key.
+The rotation RPC records an audit-ledger entry. It accepts a hash, not the plaintext key, and does not return the plaintext key.
 
 ## Transport security
 
@@ -94,4 +95,4 @@ The production service must be reached through the Render HTTPS URL. The Node ad
 
 ## Verification
 
-Automated tests cover exact-body binding, method/path/timestamp/nonce binding, malformed headers, timestamp freshness, invalid HMACs, nonce replay rejection, and the bounded key-overlap filter. A transaction-scoped database test verifies normal rotation, grace-window metadata, immediate revocation, audit behavior, and that anonymous clients cannot execute the rotation RPC.
+Automated tests cover exact-body binding, method/path/timestamp/nonce binding, malformed headers, timestamp freshness, invalid HMACs, and changing signatures. Database transaction checks verify registry-based rotation, bounded grace, immediate revocation, audit behavior, and that anonymous clients cannot execute the rotation RPC.
