@@ -6,6 +6,7 @@ import { checkRateLimit } from "../src/security/rateLimit";
 import { ingestSecurityEvent } from "../src/security/ingest";
 import { securityLog } from "../src/security/observability";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
+import { tenantApiKeyLookupFilter } from "../src/security/apiKeyRotation";
 
 const requestSchema = z.object({
   tenantId: z.uuid(),
@@ -56,10 +57,11 @@ export default async function handler(request: Request) {
     try { body = JSON.parse(rawBody); } catch { return json({ error: "INVALID_JSON", requestId }, 400, requestId); }
     const parsed = requestSchema.parse(body);
     const keyHash = hashValue(apiKey);
-    const keyLookupTime = new Date().toISOString();
     const tenant = await supabase.schema("security").from("tenants")
-      .select("id,status").eq("id", parsed.tenantId).eq("status", "active")
-      .or(`api_key_hash.eq.${keyHash},and(api_key_previous_hash.eq.${keyHash},api_key_previous_valid_until.gt.${keyLookupTime})`)
+      .select("id,status")
+      .eq("id", parsed.tenantId)
+      .eq("status", "active")
+      .or(tenantApiKeyLookupFilter(keyHash))
       .maybeSingle();
     if (tenant.error) throw tenant.error;
     if (!tenant.data || tenant.data.status !== "active") return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
