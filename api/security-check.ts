@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { supabase } from "../src/db/supabase";
 import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { securityCheck } from "../src/security/check";
