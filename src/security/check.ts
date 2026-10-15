@@ -9,6 +9,7 @@ import { analyzeAccountTakeoverSignals, analyzeConcurrentSessionAnomalies } from
 import { analyzeAdvancedBotSignals, evaluateTenantPolicies, getBehaviorBaselineScore, ensureInvestigationCase, enqueueSecurityEvent, upsertFraudCluster } from "./platform";
 import { evaluateDefenseInDepth, scoreFloorForDecision } from "./firewall";
 import type { SecurityCheckInput, SecurityCheckResult, SecurityDecision } from "./types";
+import { aggregateSecurityRisk as aggregateRisk } from "./risk";
 
 const inputSchema = z.object({
   tenantId: z.uuid(), subjectId: z.uuid().optional(), sessionId: z.uuid().optional(), requestId: z.string().min(1).max(200).optional(),
@@ -18,13 +19,7 @@ const riskLevelFor = (score: number): RiskLevel => score >= 90 ? "critical" : sc
 const decisionFor = (score: number): SecurityDecision => score >= 90 ? "BLOCK" : score >= 70 ? "REVIEW" : score >= 40 ? "CHALLENGE" : score > 0 ? "MONITOR" : "ALLOW";
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 type Signal = { signalName: string; source: string; score: number; confidence: number | null; evidence: Record<string, unknown> };
-const aggregateRisk = (signals: Signal[]) => {
-  if (!signals.length) return 0;
-  const weighted = signals.reduce((total, signal) => total + signal.score * (signal.confidence ?? 0.5), 0);
-  const sourceBonus = Math.min(15, Math.max(0, new Set(signals.map((s) => s.source)).size - 1) * 5);
-  const highSignalBonus = signals.filter((s) => s.score >= 70).length >= 2 ? 10 : 0;
-  return clamp(Math.round(Math.min(100, weighted * 0.55 + sourceBonus + highSignalBonus)));
-};
+
 
 export async function securityCheck(rawInput: SecurityCheckInput): Promise<SecurityCheckResult> {
   const input = inputSchema.parse(rawInput);
@@ -151,11 +146,32 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     if (graphScoreInfo.connectionScore > 0) signals.push({ signalName: "graph_connection_risk", source: "graph", score: graphScoreInfo.connectionScore, confidence: 0.8, evidence: { riskyConnectionCount: graphScoreInfo.riskyConnectionCount, relatedSubjectCount: graphScoreInfo.relatedSubjectCount } });
   }
 
+  // AI is an advisory annotation only. Its score/action can never participate in
+  // deterministic scoring, tenant policy evaluation, or firewall escalation.
   const deterministicScore = aggregateRisk(signals);
-  if (env.AI_ANALYZER_ENABLED === "true" && env.AI_ANALYZER_ENDPOINT && env.AI_ANALYZER_API_KEY && env.AI_ANALYZER_MODEL) {
+  let aiAdvisorySignal: Signal | null = null;
+  if (env.OPENROUTER_ENABLED === "true" && env.OPENROUTER_API_KEY) {
     try {
-      const ai = await analyzeWithAI({ tenantId: input.tenantId, subjectId: input.subjectId, sessionId: input.sessionId, endpoint: env.AI_ANALYZER_ENDPOINT, apiKey: env.AI_ANALYZER_API_KEY, model: env.AI_ANALYZER_MODEL, evidence: buildAIAdvisoryEvidence({ deterministicScore, signals }) });
-      signals.push({ signalName: "ai_advisory", source: "ai", score: ai.riskScore, confidence: Math.min(0.5, ai.confidence * 0.5), evidence: { riskLevel: ai.riskLevel, reasonCodes: ai.reasonCodes, recommendedAction: ai.recommendedAction, predictionId: ai.predictionId } });
+      const ai = await analyzeWithAI({
+        tenantId: input.tenantId,
+        subjectId: input.subjectId,
+        sessionId: input.sessionId,
+        apiKey: env.OPENROUTER_API_KEY,
+        model: env.OPENROUTER_MODEL,
+        evidence: buildAIAdvisoryEvidence({ deterministicScore, signals }),
+      });
+      aiAdvisorySignal = {
+        signalName: "ai_advisory",
+        source: "ai_advisory",
+        score: ai.riskScore,
+        confidence: Math.min(0.5, ai.confidence * 0.5),
+        evidence: {
+          riskLevel: ai.riskLevel,
+          reasonCodes: ai.reasonCodes,
+          recommendedAction: ai.recommendedAction,
+          predictionId: ai.predictionId,
+        },
+      };
     } catch (error) {
       securityLog("ai_advisory_failed", {
         requestId: input.requestId ?? null,
@@ -166,7 +182,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     }
   }
 
-  const prePolicyScore = aggregateRisk(signals);
+  const prePolicyScore = deterministicScore;
   const prePolicyDecision = decisionFor(prePolicyScore);
   const latestValueSignal = signals.find((signal) => signal.signalName === "value_jump_anomaly");
   const policyResult = await evaluateTenantPolicies(input.tenantId, {
@@ -201,7 +217,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
       confidence: item.confidence,
       evidence: { action: item.action, reasonCodes: item.reasonCodes, version: firewallResult.version },
     }));
-  const finalSignals = [...signals, ...firewallSignals];
+  const finalSignals = [...signals, ...firewallSignals, ...(aiAdvisorySignal ? [aiAdvisorySignal] : [])];
   const policyDecisionFloor = policyResult.decisionOverride
     ? scoreFloorForDecision(policyResult.decisionOverride)
     : 0;

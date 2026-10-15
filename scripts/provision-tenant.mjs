@@ -17,24 +17,37 @@ if (!url || !serverKey) {
 
 const apiKey = `gr_live_${randomBytes(32).toString("base64url")}`;
 const apiKeyHash = createHash("sha256").update(apiKey, "utf8").digest("hex");
+const externalKey = randomUUID();
 const client = createClient(url, serverKey, {
   auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
 });
 
-const result = await client.schema("security").from("tenants").insert({
-  external_key: randomUUID(),
-  name,
-  status: "active",
-  api_key_hash: apiKeyHash,
-}).select("id,name,status,created_at").single();
+const result = await client.schema("security").rpc("provision_security_tenant", {
+  p_name: name,
+  p_external_key: externalKey,
+  p_api_key_hash: apiKeyHash,
+});
 
 if (result.error) {
-  console.error("Tenant creation failed:", result.error.code ?? "DATABASE_ERROR");
+  console.error("Tenant provisioning failed:", result.error.code ?? "DATABASE_ERROR");
+  process.exit(1);
+}
+
+const provisioned = Array.isArray(result.data) ? result.data[0] : result.data;
+if (!provisioned || typeof provisioned.tenant_id !== "string" || typeof provisioned.key_id !== "string") {
+  console.error("Tenant provisioning failed: invalid database response.");
   process.exit(1);
 }
 
 console.log(JSON.stringify({
   warning: "Save this API key now. It is shown once and cannot be recovered from the database.",
-  tenant: result.data,
+  tenant: {
+    id: provisioned.tenant_id,
+    externalKey: provisioned.external_key,
+    name: provisioned.name,
+    status: provisioned.status,
+    createdAt: provisioned.created_at,
+  },
+  keyId: provisioned.key_id,
   apiKey,
 }, null, 2));
