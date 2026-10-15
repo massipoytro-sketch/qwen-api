@@ -99,14 +99,14 @@ export default async function handler(request: Request) {
 
     const rateLimitChecks = await Promise.all([
       checkRateLimit({
-        tenantId: tenant.data.id,
+        tenantId: parsed.tenantId,
         key: `api:${hashValue(apiKey)}`,
         bucket: "security-check",
         limit: 60,
         windowSeconds: 60,
       }),
       ...(parsed.subjectId ? [checkRateLimit({
-        tenantId: tenant.data.id,
+        tenantId: parsed.tenantId,
         key: `subject:${parsed.subjectId}`,
         bucket: "security-check-subject",
         limit: 30,
@@ -125,7 +125,7 @@ export default async function handler(request: Request) {
     }
 
     const result = await securityCheck({
-      tenantId: tenant.data.id,
+      tenantId: parsed.tenantId,
       subjectId: parsed.subjectId,
       sessionId: parsed.sessionId,
       requestId,
