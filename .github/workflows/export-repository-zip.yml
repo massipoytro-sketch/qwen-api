@@ -1,6 +1,8 @@
 name: Export Repository ZIP
 
 on:
+  push:
+    branches: ["hardening/part-2-defense-in-depth"]
   workflow_dispatch:
 
 permissions:
