@@ -6,7 +6,6 @@ import { securityCheck } from "../src/security/check";
 import { securityLog } from "../src/security/observability";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 import { authenticateRotatedTenantKey } from "../src/security/tenantAuth";
-import { tenantApiKeyLookupFilter } from "../src/security/apiKeyRotation";
 import { env } from "../src/config/env";
 
 const bodySchema = z.object({
