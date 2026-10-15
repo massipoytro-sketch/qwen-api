@@ -2,7 +2,7 @@
 
 ## Scope
 
-Part 3 completes the pre-AI core by adding controlled tenant API-key rotation, bounded previous-key overlap, additional tests, and operator/client integration guidance. It does not enable or configure any AI model.
+Part 3 finishes the pre-AI core by hardening the existing tenant API-key registry, requiring consistent registry-based authentication on security-check and security-event endpoints, and documenting safe operator integration. It does not enable or configure any AI model.
 
 ## Request integrity and replay resistance
 
@@ -10,16 +10,20 @@ Security-check and security-event endpoints require a versioned HMAC-SHA256 sign
 
 The signing key is a server-side tenant API key. Never ship it to browser JavaScript, a public mobile application, or a public repository. See `docs/SERVER_TO_SERVER_SIGNING_AND_ROTATION.md` for the canonical payload and Node.js backend example.
 
-## Controlled API-key rotation
+## Canonical API-key rotation
 
-The migration adds:
-- `api_key_previous_hash`
-- `api_key_previous_valid_until`
-- `api_key_rotated_at`
+The project already has a dedicated `security.tenant_api_keys` registry and `security.consume_rotated_api_key` authentication RPC. Part 3 preserves that single source of truth; it does not keep a second key registry on `security.tenants`.
 
-`security.rotate_tenant_api_key` accepts only a 64-character lowercase SHA-256 hash, locks the tenant row, requires an active tenant and a different key, caps overlap at 24 hours, and records the rotation in the append-only audit ledger. Its execute privilege is restricted to `service_role`. A zero-second grace window immediately revokes the previous key. Plaintext keys are never stored or returned by the database.
+The hardened `security.rotate_tenant_api_key(uuid,text,text,integer)` RPC:
+- accepts only a lowercase 64-character SHA-256 hash and a bounded label;
+- requires an active tenant and rejects an already-active/grace key hash;
+- permits a grace period from 0 through 86,400 seconds (24 hours);
+- transitions the old active key to `grace` during the overlap, or immediately to `revoked` when grace is zero;
+- inserts the new key as `active`;
+- records a compact rotation entry in the append-only audit ledger;
+- is executable only by `service_role`.
 
-The two signed API endpoints accept the current hash or the previous hash only until the explicit grace expiry. Expired previous hashes are not accepted even if the row still contains their metadata.
+The plaintext API key is generated and retained by the trusted operator/backend only. The database stores hashes, never the plaintext key. The security-check and security-event endpoints both authenticate against the same registry, including optional strict `X-GainiRen-Key-Id` matching.
 
 ## Transport and runtime boundaries
 
@@ -29,15 +33,15 @@ Body size, header size/count, request and header timeouts, method allowlisting, 
 
 ## Database scope
 
-Migration `20261015110000_tenant_api_key_rotation.sql` was applied only to the dedicated `gainiren-shield-lab` project. The older `rewards-platform` database was not touched.
+The API-key rotation work was applied only to the dedicated `gainiren-shield-lab` project. Migration `20261015113000_harden_registry_key_rotation.sql` removes the duplicate draft columns from `security.tenants` and hardens the canonical `security.tenant_api_keys` rotation RPC. The earlier `20261015110000_tenant_api_key_rotation.sql` is superseded by this corrective migration. The older `rewards-platform` database was not touched.
 
 ## Validation performed
 
-- PostgreSQL transaction-scoped test passed for normal key rotation, old-key grace metadata, second rotation with immediate revocation, audit writes, and rejection of anonymous execute privilege. Test tenant and ledger writes were rolled back.
-- Existing HMAC test suite covers exact-body integrity, method and path/query binding, changing signatures for fresh timestamp/nonce, wrong key rejection, missing headers, stale/future timestamps, malformed nonce, and malformed signature.
-- Added unit tests validate key-hash-only query construction, bounded previous-key expiry, and malformed input rejection.
-- Part 3 CI must pass on the final commit: typecheck, lint, unit tests, production dependency audit, runtime smoke, HoneyDB tests, and CodeQL.
+- PostgreSQL transaction-scoped test passed against the canonical registry for a normal rotation, previous-key grace metadata, immediate revocation with zero grace, audit writes, and rejection of anonymous execute privilege. Test tenant, keys, and ledger writes were rolled back.
+- Existing HMAC tests cover exact-body integrity, method and path/query binding, signature changes for fresh timestamp/nonce, wrong-key rejection, missing headers, stale/future timestamps, malformed nonce, and malformed signature.
+- Security CI, runtime smoke, HoneyDB CI, and CodeQL must pass on the final Part 3 commit before merging.
+- A live end-to-end signed request against a dedicated non-production tenant and confirmation of the deployed Render commit remain required before routing production traffic.
 
 ## Completion boundary
 
-Part 3 completes the code/database hardening stage, not a claim that the system is globally certified or immune to attacks. Before connecting production GainiRen traffic, run the final CI gates, confirm the deployed Render commit, test signed requests against a dedicated non-production tenant, validate rotation and replay rejection end-to-end, and verify TLS at the public endpoint. AI integration is the next separate phase and must remain advisory-only.
+Part 3 completes the code/database hardening stage; it is not a claim of global certification or immunity to attacks. AI integration is a separate next phase and remains disabled until then.
