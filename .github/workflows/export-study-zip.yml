@@ -1,0 +1,30 @@
+name: Export Study ZIP
+
+on:
+  push:
+    branches:
+      - export/part-2-study-zip
+
+permissions:
+  contents: read
+
+actions:
+  - uses: actions/checkout@v4
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create source archive
+        run: |
+          git archive --format=zip --output=GainiRen-Security-Part-2-Study.zip HEAD
+      - name: Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: GainiRen-Security-Part-2-Study
+          path: GainiRen-Security-Part-2-Study.zip
+          if-no-files-found: error
+          retention-days: 7
