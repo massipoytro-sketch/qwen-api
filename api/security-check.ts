@@ -5,6 +5,7 @@ import { checkRateLimit } from "../src/security/rateLimit";
 import { securityCheck } from "../src/security/check";
 import { securityLog } from "../src/security/observability";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
+import { tenantApiKeyLookupFilter } from "../src/security/apiKeyRotation";
 import { env } from "../src/config/env";
 
 const bodySchema = z.object({
@@ -75,7 +76,8 @@ export default async function handler(request: Request) {
     const tenant = await supabase.schema("security").from("tenants")
       .select("id,status")
       .eq("id", parsed.tenantId)
-      .eq("api_key_hash", keyHash)
+      .eq("status", "active")
+      .or(tenantApiKeyLookupFilter(keyHash))
       .maybeSingle();
 
     if (tenant.error) throw tenant.error;
