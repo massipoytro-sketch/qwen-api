@@ -8,9 +8,6 @@ on:
 permissions:
   contents: read
 
-actions:
-  - uses: actions/checkout@v4
-
 jobs:
   export:
     runs-on: ubuntu-latest
@@ -19,8 +16,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Create source archive
-        run: |
-          git archive --format=zip --output=GainiRen-Security-Part-2-Study.zip HEAD
+        run: git archive --format=zip --output=GainiRen-Security-Part-2-Study.zip HEAD
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
