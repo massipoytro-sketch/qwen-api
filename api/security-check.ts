@@ -72,10 +72,12 @@ export default async function handler(request: Request) {
     const parsed = bodySchema.parse(body);
     const keyHash = hashValue(apiKey);
 
+    const keyLookupTime = new Date().toISOString();
     const tenant = await supabase.schema("security").from("tenants")
       .select("id,status")
       .eq("id", parsed.tenantId)
-      .eq("api_key_hash", keyHash)
+      .eq("status", "active")
+      .or(`api_key_hash.eq.${keyHash},and(api_key_previous_hash.eq.${keyHash},api_key_previous_valid_until.gt.${keyLookupTime})`)
       .maybeSingle();
 
     if (tenant.error) throw tenant.error;
