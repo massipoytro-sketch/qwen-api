@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { supabase } from "../src/db/supabase";
 import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { securityCheck } from "../src/security/check";
 import { securityLog } from "../src/security/observability";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
+import { authenticateRotatedTenantKey } from "../src/security/tenantAuth";
 import { env } from "../src/config/env";
 
 const bodySchema = z.object({
@@ -27,7 +27,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
       ...(requestId ? { "x-request-id": requestId } : {}),
       ...(env.SECURITY_API_CORS_ORIGIN ? {
         "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
-        "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce",
+        "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce,x-gainiren-key-id",
         "access-control-allow-methods": "POST,OPTIONS",
         "vary": "Origin",
       } : {}),
@@ -70,17 +70,14 @@ export default async function handler(request: Request) {
     }
 
     const parsed = bodySchema.parse(body);
-    const keyHash = hashValue(apiKey);
-
-    const tenant = await supabase.schema("security").from("tenants")
-      .select("id,status")
-      .eq("id", parsed.tenantId)
-      .eq("api_key_hash", keyHash)
-      .maybeSingle();
-
-    if (tenant.error) throw tenant.error;
-    if (!tenant.data || tenant.data.status !== "active") {
-      securityLog("auth_denied", { requestId });
+    const keyId = request.headers.get("x-gainiren-key-id")?.trim() || null;
+    const authentication = await authenticateRotatedTenantKey({
+      tenantId: parsed.tenantId,
+      apiKey,
+      keyId,
+    });
+    if (!authentication.authorized) {
+      securityLog("auth_denied", { requestId, tenantId: parsed.tenantId });
       return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
     }
 
@@ -88,12 +85,12 @@ export default async function handler(request: Request) {
       request,
       rawBody,
       apiKey,
-      tenantId: tenant.data.id,
+      tenantId: parsed.tenantId,
     });
     if (!signature.valid) {
       securityLog("request_signature_rejected", {
         requestId,
-        tenantId: tenant.data.id,
+        tenantId: parsed.tenantId,
         reasonCode: signature.reasonCode,
       });
       return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
@@ -101,14 +98,14 @@ export default async function handler(request: Request) {
 
     const rateLimitChecks = await Promise.all([
       checkRateLimit({
-        tenantId: tenant.data.id,
-        key: `api:${apiKey}`,
+        tenantId: parsed.tenantId,
+        key: `api:${hashValue(apiKey)}`,
         bucket: "security-check",
         limit: 60,
         windowSeconds: 60,
       }),
       ...(parsed.subjectId ? [checkRateLimit({
-        tenantId: tenant.data.id,
+        tenantId: parsed.tenantId,
         key: `subject:${parsed.subjectId}`,
         bucket: "security-check-subject",
         limit: 30,
@@ -127,7 +124,7 @@ export default async function handler(request: Request) {
     }
 
     const result = await securityCheck({
-      tenantId: tenant.data.id,
+      tenantId: parsed.tenantId,
       subjectId: parsed.subjectId,
       sessionId: parsed.sessionId,
       requestId,

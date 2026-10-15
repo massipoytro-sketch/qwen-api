@@ -34,9 +34,9 @@ docs/        Architecture, threat model, database, and security documentation
 
 ## Development status
 
-Phase 0 — architecture and threat model.
+Core security phases 1–3 are being developed and validated in isolated pull requests. The platform includes deterministic risk assessment, account/session verification, multi-layer decision firewall, tenant-scoped audit ledger, circuit breakers, synthetic deception sensors, HMAC request signing with replay protection, and controlled API-key rotation. See `docs/PART_2_DEFENSE_IN_DEPTH.md` and `docs/PART_3_OPERATIONAL_HARDENING.md`.
 
-The project is intentionally independent from the existing GainiRen application and its older database until the security platform is stable enough for integration.
+The project and its `gainiren-shield-lab` database are intentionally independent from the older `rewards-platform` application and database. AI remains disabled until the separate AI phase. Production integration is gated on successful CI, end-to-end signed-request tests, and deployment verification.
 
 ## Security
 
