@@ -56,8 +56,11 @@ export default async function handler(request: Request) {
     try { body = JSON.parse(rawBody); } catch { return json({ error: "INVALID_JSON", requestId }, 400, requestId); }
     const parsed = requestSchema.parse(body);
     const keyHash = hashValue(apiKey);
+    const keyLookupTime = new Date().toISOString();
     const tenant = await supabase.schema("security").from("tenants")
-      .select("id,status").eq("id", parsed.tenantId).eq("api_key_hash", keyHash).maybeSingle();
+      .select("id,status").eq("id", parsed.tenantId).eq("status", "active")
+      .or(`api_key_hash.eq.${keyHash},and(api_key_previous_hash.eq.${keyHash},api_key_previous_valid_until.gt.${keyLookupTime})`)
+      .maybeSingle();
     if (tenant.error) throw tenant.error;
     if (!tenant.data || tenant.data.status !== "active") return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
 
