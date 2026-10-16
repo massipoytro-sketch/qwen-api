@@ -21,6 +21,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(J
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
+    ...securityHeaders(),
     ...(requestId ? { "x-request-id": requestId } : {}),
   },
 });
