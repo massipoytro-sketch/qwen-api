@@ -22,10 +22,6 @@ export function strictestDecision(...decisions: SecurityDecision[]): SecurityDec
     decisionRank[current] > decisionRank[best] ? current : best, "ALLOW");
 }
 
-/**
- * Converts the internal risk result into an enforcement contract. It never
- * relaxes a decision and does not trust client-supplied risk claims.
- */
 export function buildEnforcementContract(input: {
   decision: SecurityDecision;
   firewallDecision: SecurityDecision;
@@ -58,7 +54,6 @@ function challengePayload(input: { tenantId: string; subjectId?: string; request
   ].join("\n");
 }
 
-/** Creates a short-lived server-signed challenge token. The signing key must stay server-side. */
 export function createChallengeToken(input: {
   signingKey: string;
   tenantId: string;
@@ -95,7 +90,7 @@ export function verifyChallengeToken(input: {
   try { payload = Buffer.from(parts[1], "base64url").toString("utf8"); } catch { return false; }
   const fields = payload.split("\n");
   if (fields.length !== 6 || fields[0] !== "GAINIREN-CHALLENGE-V1") return false;
-  const [prefix, tenantId, subjectId, requestId, type, expiresText] = fields;
+  const [, tenantId, subjectId, requestId, type, expiresText] = fields;
   if (tenantId !== input.tenantId || subjectId !== (input.subjectId ?? "") || requestId !== input.requestId || type !== input.type) return false;
   const expiresAt = Number(expiresText);
   if (!Number.isSafeInteger(expiresAt) || Math.floor((input.nowMs ?? Date.now()) / 1000) > expiresAt) return false;
