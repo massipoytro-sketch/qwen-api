@@ -28,6 +28,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
       "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer",
       "x-frame-options": "DENY",
+      ...securityHeaders(),
       ...(requestId ? { "x-request-id": requestId } : {}),
       ...(env.SECURITY_API_CORS_ORIGIN ? {
         "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
