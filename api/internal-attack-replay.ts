@@ -283,7 +283,7 @@ export default async function handler(request: Request) {
       finalDecision: result.finalDecision,
       finalScoreFloor: Math.max(scoreFloorForEnforcement(result.finalDecision), result.finalScoreFloor),
       escalations: result.escalations,
-      reasonCodes: result.reasonCodes,
+      reasonCodes: result.reasonCodes.slice(0, 64),
       completed: true,
     };
 
