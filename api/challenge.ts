@@ -5,6 +5,7 @@ import { issueSecurityChallenge, consumeSecurityChallenge, completeVerifiedSecur
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 import { authenticateRotatedTenantKey } from "../src/security/tenantAuth";
 import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
+import { isSecureTransport, securityHeaders } from "../src/security/transport";
 
 const bodySchema = z.discriminatedUnion("mode", [
   z.object({
@@ -46,6 +47,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
       "referrer-policy": "no-referrer",
+      ...securityHeaders(),
       ...(requestId ? { "x-request-id": requestId } : {}),
     },
   },
@@ -54,6 +56,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
 export default async function handler(request: Request) {
   const candidate = request.headers.get("x-request-id") ?? "";
   const requestId = /^[A-Za-z0-9._:-]{1,100}$/.test(candidate) ? candidate : crypto.randomUUID();
+  if (!isSecureTransport(request)) return json({ error: "TLS_REQUIRED", requestId }, 426, requestId);
   if (request.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED", requestId }, 405, requestId);
 
   const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization") ?? "");
