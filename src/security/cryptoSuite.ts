@@ -11,7 +11,6 @@ import {
   randomBytes,
   sign,
   verify,
-  type KeyObject,
 } from "node:crypto";
 
 const AES_ALGORITHM = "aes-256-gcm" as const;
@@ -36,9 +35,7 @@ export type EncryptedEnvelope = {
 const b64 = (value: Uint8Array) => Buffer.from(value).toString("base64url");
 const fromB64 = (value: string) => Buffer.from(value, "base64url");
 
-export function generateAes256Key(): Buffer {
-  return randomBytes(AES_KEY_BYTES);
-}
+export function generateAes256Key(): Buffer { return randomBytes(AES_KEY_BYTES); }
 
 function assertAes256Key(key: Uint8Array): Buffer {
   const normalized = Buffer.from(key);
@@ -47,14 +44,15 @@ function assertAes256Key(key: Uint8Array): Buffer {
 }
 
 export function encryptBytes(input: Uint8Array, key: Uint8Array, keyId = "primary", aad?: string): EncryptedEnvelope {
-  const cipher = createCipheriv(AES_ALGORITHM, assertAes256Key(key), randomBytes(AES_IV_BYTES), { authTagLength: AES_TAG_BYTES });
+  const iv = randomBytes(AES_IV_BYTES);
+  const cipher = createCipheriv(AES_ALGORITHM, assertAes256Key(key), iv, { authTagLength: AES_TAG_BYTES });
   if (aad !== undefined) cipher.setAAD(Buffer.from(aad, "utf8"), { plaintextLength: input.byteLength });
   const ciphertext = Buffer.concat([cipher.update(Buffer.from(input)), cipher.final()]);
   return {
     version: CRYPTO_SUITE_VERSION,
     algorithm: AES_ALGORITHM,
     keyId,
-    iv: b64(cipher.getAuthTag().length ? (cipher as unknown as { getIV?: () => Buffer }).getIV?.() ?? Buffer.alloc(0) : Buffer.alloc(0)),
+    iv: b64(iv),
     ciphertext: b64(ciphertext),
     authTag: b64(cipher.getAuthTag()),
     ...(aad !== undefined ? { aad: b64(Buffer.from(aad, "utf8")) } : {}),
@@ -80,30 +78,31 @@ export function decryptString(envelope: EncryptedEnvelope, key: Uint8Array, aadO
   return decryptBytes(envelope, key, aadOverride).toString("utf8");
 }
 
-export type P384KeyPair = {
-  privateKeyPem: string;
-  publicKeyPem: string;
-};
+export type P384KeyPair = { privateKey: Buffer; publicKey: Buffer };
 
+/** Raw SEC1 P-384 keys. Private keys must remain server-side; public keys may be shared. */
 export function generateP384KeyPair(): P384KeyPair {
+  const ecdh = createECDH(P384_CURVE);
+  ecdh.generateKeys();
+  return { privateKey: ecdh.getPrivateKey(), publicKey: ecdh.getPublicKey() };
+}
+
+export function deriveP384SharedKey(privateKey: Uint8Array, peerPublicKey: Uint8Array, salt?: Uint8Array, info = "gainiren-security-p384-v1"): Buffer {
+  const ecdh = createECDH(P384_CURVE);
+  ecdh.setPrivateKey(Buffer.from(privateKey));
+  const shared = ecdh.computeSecret(Buffer.from(peerPublicKey));
+  return Buffer.from(hkdfSync(HKDF_HASH, shared, salt ?? Buffer.alloc(0), Buffer.from(info, "utf8"), AES_KEY_BYTES));
+}
+
+export type Ecdsa384KeyPair = { privateKeyPem: string; publicKeyPem: string };
+
+export function generateEcdsa384KeyPair(): Ecdsa384KeyPair {
   const { privateKey, publicKey } = generateKeyPairSync("ec", {
     namedCurve: P384_CURVE,
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   return { privateKeyPem: privateKey, publicKeyPem: publicKey };
-}
-
-export function deriveP384SharedKey(privateKeyPem: string, peerPublicKeyPem: string, salt?: Uint8Array, info = "gainiren-security-p384-v1"): Buffer {
-  const privateKey = createPrivateKey(privateKeyPem);
-  const publicKey = createPublicKey(peerPublicKeyPem);
-  const ecdh = createECDH(P384_CURVE);
-  const privateDer = privateKey.export({ type: "pkcs8", format: "der" });
-  const publicDer = publicKey.export({ type: "spki", format: "der" });
-  ecdh.setPrivateKey(privateDer.subarray(Math.max(0, privateDer.length - 48)));
-  const peerPoint = publicDer.subarray(Math.max(0, publicDer.length - 97));
-  const shared = ecdh.computeSecret(peerPoint);
-  return Buffer.from(hkdfSync(HKDF_HASH, shared, salt ?? Buffer.alloc(0), Buffer.from(info, "utf8"), AES_KEY_BYTES));
 }
 
 export function signEcdsa384(payload: Uint8Array | string, privateKeyPem: string): string {
