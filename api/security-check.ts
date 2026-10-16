@@ -5,6 +5,7 @@ import { checkRateLimit } from "../src/security/rateLimit";
 import { securityCheck } from "../src/security/check";
 import { securityLog } from "../src/security/observability";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
+import { buildEnforcementContract, securityResponseHeaders } from "../src/security/enforcement";
 import { env } from "../src/config/env";
 
 const bodySchema = z.object({
@@ -14,7 +15,7 @@ const bodySchema = z.object({
   requestId: z.string().min(1).max(200).optional(),
 });
 
-const json = (body: unknown, status = 200, requestId?: string) => new Response(
+const json = (body: unknown, status = 200, requestId?: string, extraHeaders: Record<string, string> = {}) => new Response(
   status === 204 ? null : JSON.stringify(body),
   {
     status,
@@ -25,6 +26,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
       "referrer-policy": "no-referrer",
       "x-frame-options": "DENY",
       ...(requestId ? { "x-request-id": requestId } : {}),
+      ...extraHeaders,
       ...(env.SECURITY_API_CORS_ORIGIN ? {
         "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
         "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce",
@@ -81,7 +83,7 @@ export default async function handler(request: Request) {
     if (tenant.error) throw tenant.error;
     if (!tenant.data || tenant.data.status !== "active") {
       securityLog("auth_denied", { requestId });
-      return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
+      return json({ error: "UNAUTHORIZED", requestId }, 401);
     }
 
     const signature = await verifyAndConsumeRequestSignature({
@@ -96,7 +98,7 @@ export default async function handler(request: Request) {
         tenantId: tenant.data.id,
         reasonCode: signature.reasonCode,
       });
-      return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
+      return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401);
     }
 
     const rateLimitChecks = await Promise.all([
@@ -133,7 +135,14 @@ export default async function handler(request: Request) {
       requestId,
     });
 
-    return json({ ...result, requestId }, 200, requestId);
+    const enforcement = buildEnforcementContract({
+      decision: result.decision,
+      firewallDecision: result.decision,
+      challenge: result.challengeRecommendation ?? null,
+      requestId,
+    });
+
+    return json({ ...result, enforcement, requestId }, 200, requestId, securityResponseHeaders(requestId, signature.nonce));
   } catch (error) {
     if (error instanceof Error && ["SUBJECT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_SUBJECT_MISMATCH", "SESSION_NOT_ACTIVE"].includes(error.message)) {
       return json({ error: "INVALID_CONTEXT", requestId }, 400, requestId);
