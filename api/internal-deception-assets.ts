@@ -146,6 +146,24 @@ export default async function handler(request: Request) {
         throw result.error;
       }
       const asset = Array.isArray(result.data) ? result.data[0] : result.data;
+      const ledgerEntry = await supabase.schema("security").rpc("append_security_ledger_entry", {
+        p_tenant_id: parsed.tenantId,
+        p_action: "deception_asset_registered",
+        p_resource_type: "deception_asset",
+        p_resource_id: typeof asset?.id === "string" ? asset.id : null,
+        p_request_id: requestId,
+        p_actor_type: "operator",
+        p_details: {
+          assetType: parsed.assetType,
+          assetName: parsed.assetName,
+          locatorHash,
+          environment: parsed.metadata.environment ?? null,
+          tags: parsed.metadata.tags ?? [],
+        },
+      });
+      if (ledgerEntry.error) securityLog("deception_asset_ledger_append_failed", {
+        requestId, tenantId: parsed.tenantId, errorCode: safeErrorCode(ledgerEntry.error),
+      });
       securityLog("deception_asset_registered", {
         requestId, tenantId: parsed.tenantId, assetId: asset?.id,
         assetType: parsed.assetType, locatorHash,
@@ -177,6 +195,18 @@ export default async function handler(request: Request) {
       throw result.error;
     }
     const asset = Array.isArray(result.data) ? result.data[0] : result.data;
+    const ledgerEntry = await supabase.schema("security").rpc("append_security_ledger_entry", {
+      p_tenant_id: parsed.tenantId,
+      p_action: "deception_asset_status_changed",
+      p_resource_type: "deception_asset",
+      p_resource_id: parsed.assetId,
+      p_request_id: requestId,
+      p_actor_type: "operator",
+      p_details: { status: parsed.status },
+    });
+    if (ledgerEntry.error) securityLog("deception_asset_ledger_append_failed", {
+      requestId, tenantId: parsed.tenantId, errorCode: safeErrorCode(ledgerEntry.error),
+    });
     securityLog("deception_asset_status_changed", {
       requestId, tenantId: parsed.tenantId, assetId: parsed.assetId, status: parsed.status,
     });
