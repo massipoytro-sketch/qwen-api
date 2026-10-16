@@ -34,6 +34,7 @@ jobs:
         env:
           SUPABASE_URL: https://ci-placeholder.supabase.co
           SUPABASE_SERVER_KEY: ci-placeholder-not-a-real-secret
+          SECURITY_OPS_TOKEN: ci-internal-ops-token-12345678901234567890
           PORT: "3210"
           NODE_ENV: production
         run: |
@@ -93,7 +94,17 @@ jobs:
           code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request GET --header 'X-Forwarded-Proto: https' \
             http://127.0.0.1:3210/api/internal/security-timeline)
-          test "$code" = "404"
+          test "$code" = "401"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request GET --header 'X-Forwarded-Proto: https' \
+            http://127.0.0.1:3210/api/internal/deception-assets?tenantId=00000000-0000-0000-0000-000000000000)
+          test "$code" = "401"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request GET --header 'X-Forwarded-Proto: https' \
+            http://127.0.0.1:3210/api/internal/attack-replay?tenantId=00000000-0000-0000-0000-000000000000)
+          test "$code" = "401"
 
           headers=$(curl --silent --dump-header - --output /dev/null \
             --request POST --header 'X-Forwarded-Proto: https' --header 'Content-Type: application/json' \
