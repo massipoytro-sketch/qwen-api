@@ -46,6 +46,11 @@ export default async function handler(request: Request) {
   if (request.method === "OPTIONS") return json({}, 204, requestId);
   if (request.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED", requestId }, 405, requestId);
 
+  if (process.env.NODE_ENV === "production") {
+    const protocol = new URL(request.url).protocol;
+    if (protocol !== "https:") return json({ error: "HTTPS_REQUIRED", requestId }, 400, requestId);
+  }
+
   const auth = request.headers.get("authorization") ?? "";
   const bearer = /^Bearer\s+(.+)$/i.exec(auth);
   if (!bearer) return json({ error: "UNAUTHORIZED", requestId }, 401, requestId);
@@ -98,7 +103,7 @@ export default async function handler(request: Request) {
         tenantId: tenant.data.id,
         reasonCode: signature.reasonCode,
       });
-      return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401);
+      return json({ error: "INVALID_REQUEST_SIGNATURE", requestId }, 401, requestId);
     }
 
     const rateLimitChecks = await Promise.all([
