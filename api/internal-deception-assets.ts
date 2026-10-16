@@ -7,9 +7,11 @@ import { hashDeceptionLocator, isSafeDeceptionLocator } from "../src/security/de
 import { isSecureTransport, securityHeaders } from "../src/security/transport";
 import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
 
+const safeLabel = (value: string) => !/[\\u0000-\\u001F\\u007F]/.test(value);
+
 const metadataSchema = z.object({
-  description: z.string().max(500).optional(),
-  ownerTeam: z.string().max(80).optional(),
+  description: z.string().max(500).refine(safeLabel, "Control characters are not allowed").optional(),
+  ownerTeam: z.string().max(80).refine(safeLabel, "Control characters are not allowed").optional(),
   environment: z.enum(["production", "staging", "test"]).optional(),
   tags: z.array(z.string().min(1).max(40).regex(/^[A-Za-z0-9_.:-]+$/)).max(20).optional(),
 }).strict();
@@ -17,7 +19,7 @@ const metadataSchema = z.object({
 const createSchema = z.object({
   tenantId: z.uuid(),
   assetType: z.enum(["route", "credential_canary", "database_canary", "service_canary", "document_canary"]),
-  assetName: z.string().trim().min(1).max(160),
+  assetName: z.string().trim().min(1).max(160).refine(safeLabel, "Control characters are not allowed"),
   locator: z.string().min(1).max(256).refine(isSafeDeceptionLocator, "Invalid synthetic locator format"),
   metadata: metadataSchema.default({}),
 }).strict();
