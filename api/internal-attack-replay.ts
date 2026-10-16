@@ -218,9 +218,14 @@ export default async function handler(request: Request) {
         return json({ error: "NOT_FOUND", requestId }, 404, requestId);
       }
       try {
-        await supabase.schema("security").rpc("expire_attack_replays", { p_batch_size: 20 });
-      } catch {
-        // Expiration is maintenance; retrieval remains read-only if cleanup is temporarily unavailable.
+        const cleanup = await supabase.schema("security").rpc("expire_attack_replays", { p_batch_size: 20 });
+        if (cleanup.error) securityLog("attack_replay_cleanup_failed", {
+          requestId, tenantId: parsed.tenantId, errorCode: safeErrorCode(cleanup.error),
+        });
+      } catch (error) {
+        securityLog("attack_replay_cleanup_failed", {
+          requestId, tenantId: parsed.tenantId, errorCode: safeErrorCode(error),
+        });
       }
       if (parsed.replayId) {
         const result = await supabase.schema("security").rpc("get_attack_replay", {
@@ -247,9 +252,14 @@ export default async function handler(request: Request) {
     }
 
     try {
-      await supabase.schema("security").rpc("expire_attack_replays", { p_batch_size: 20 });
-    } catch {
-      // Creating a bounded replay must not fail only because opportunistic cleanup failed.
+      const cleanup = await supabase.schema("security").rpc("expire_attack_replays", { p_batch_size: 20 });
+      if (cleanup.error) securityLog("attack_replay_cleanup_failed", {
+        requestId, tenantId: parsed.tenantId, errorCode: safeErrorCode(cleanup.error),
+      });
+    } catch (error) {
+      securityLog("attack_replay_cleanup_failed", {
+        requestId, tenantId: parsed.tenantId, errorCode: safeErrorCode(error),
+      });
     }
 
     const loaded = await loadReplayEvents({
@@ -292,7 +302,7 @@ export default async function handler(request: Request) {
     try {
       for (const event of loaded.events) {
         const action = event.decision === "ALLOW" ? "observe" : event.decision.toLowerCase();
-        await supabase.schema("security").rpc("append_attack_replay_step", {
+        const step = await supabase.schema("security").rpc("append_attack_replay_step", {
           p_replay_id: replayId,
           p_sequence_no: event.sequence,
           p_event_type: event.eventType,
@@ -304,9 +314,8 @@ export default async function handler(request: Request) {
             score: Math.max(0, Math.min(100, Number(event.score) || 0)),
             replayEngineVersion: "deterministic-replay-v1",
           },
-        }).then((step) => {
-          if (step.error) throw step.error;
         });
+        if (step.error) throw step.error;
       }
       const finalized = await supabase.schema("security").rpc("finalize_attack_replay", {
         p_replay_id: replayId,
@@ -315,11 +324,20 @@ export default async function handler(request: Request) {
       });
       if (finalized.error) throw finalized.error;
     } catch (error) {
-      await supabase.schema("security").rpc("finalize_attack_replay", {
-        p_replay_id: replayId,
-        p_status: "failed",
-        p_summary: { engineVersion: "deterministic-replay-v1", errorCode: safeErrorCode(error) },
-      }).catch(() => undefined);
+      try {
+        const finalizedFailure = await supabase.schema("security").rpc("finalize_attack_replay", {
+          p_replay_id: replayId,
+          p_status: "failed",
+          p_summary: { engineVersion: "deterministic-replay-v1", errorCode: safeErrorCode(error) },
+        });
+        if (finalizedFailure.error) securityLog("attack_replay_failure_finalize_failed", {
+          requestId, tenantId: parsed.tenantId, replayId, errorCode: safeErrorCode(finalizedFailure.error),
+        });
+      } catch (finalizeError) {
+        securityLog("attack_replay_failure_finalize_failed", {
+          requestId, tenantId: parsed.tenantId, replayId, errorCode: safeErrorCode(finalizeError),
+        });
+      }
       throw new Error("REPLAY_PERSISTENCE_FAILED");
     }
 
