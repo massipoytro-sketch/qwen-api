@@ -66,7 +66,7 @@ describe("corroborated bot defense", () => {
     const result = analyzeBotDefense({
       now,
       events: Array.from({ length: 100 }, (_, index) => ({
-        occurredAt: at(-11 * 60_000 + index * 1_000),
+        occurredAt: at(-12 * 60_000 + index * 1_000),
         isBot: true,
         confidence: 1,
         signals: { webdriver: true, headless: true },
