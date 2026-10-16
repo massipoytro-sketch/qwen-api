@@ -5,6 +5,7 @@ import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { ingestSecurityEvent } from "../src/security/ingest";
 import { securityLog, safeErrorCode, safeErrorStatus } from "../src/security/observability";
+import { isSecureTransport, securityHeaders } from "../src/security/transport";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 import { authenticateRotatedTenantKey } from "../src/security/tenantAuth";
 
@@ -72,6 +73,8 @@ async function finalizeIdempotency(
 export default async function handler(request: Request) {
   const candidateRequestId = request.headers.get("x-request-id") ?? "";
   const requestId = /^[a-zA-Z0-9._:-]{1,100}$/.test(candidateRequestId) ? candidateRequestId : crypto.randomUUID();
+
+  if (!isSecureTransport(request)) return json({ error: "TLS_REQUIRED", requestId }, 426, requestId);
 
   if (request.method === "OPTIONS") return json({}, 204, requestId);
   if (request.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED", requestId }, 405, requestId);
