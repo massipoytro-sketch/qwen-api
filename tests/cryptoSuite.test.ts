@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createSignedEnvelope,
   deriveP384SharedKey,
   encryptString,
   decryptString,
@@ -10,6 +11,7 @@ import {
   sha512,
   signEcdsa384,
   verifyEcdsa384,
+  verifySignedEnvelope,
 } from "../src/security/cryptoSuite";
 
 describe("cryptographic trust suite", () => {
@@ -47,6 +49,18 @@ describe("cryptographic trust suite", () => {
     const signature = signEcdsa384(payload, keys.privateKeyPem);
     expect(verifyEcdsa384(payload, signature, keys.publicKeyPem)).toBe(true);
     expect(verifyEcdsa384(`${payload}|tampered`, signature, keys.publicKeyPem)).toBe(false);
+  });
+
+  it("binds signatures to a fresh nonce, timestamp and payload digest", () => {
+    const keys = generateEcdsa384KeyPair();
+    const now = Date.now();
+    const first = createSignedEnvelope("message", keys.privateKeyPem, now);
+    const second = createSignedEnvelope("message", keys.privateKeyPem, now);
+    expect(first.nonce).not.toBe(second.nonce);
+    expect(first.signature).not.toBe(second.signature);
+    expect(verifySignedEnvelope("message", first, keys.publicKeyPem, now)).toBe(true);
+    expect(verifySignedEnvelope("tampered", first, keys.publicKeyPem, now)).toBe(false);
+    expect(verifySignedEnvelope("message", first, keys.publicKeyPem, now + 301_000)).toBe(false);
   });
 
   it("produces SHA-384 and SHA-512 fingerprints", () => {
