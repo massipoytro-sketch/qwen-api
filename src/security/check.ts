@@ -459,6 +459,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
         score, riskLevel, decision,
         signalNames: finalSignals.map((signal) => signal.signalName),
         firewallMinimumDecision: firewallResult.minimumDecision,
+        fraudDecisionFloor,
         firewallReasonCodes: firewallResult.reasonCodes,
       },
     }),
