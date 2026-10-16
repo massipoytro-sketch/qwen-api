@@ -4,7 +4,8 @@ import { env } from "../src/config/env";
 import { supabase } from "../src/db/supabase";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { enqueueSecurityEvent } from "../src/security/platform";
-import { securityLog } from "../src/security/observability";
+import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
+import { hashDeceptionLocator } from "../src/security/deception";
 import { isSecureTransport, securityHeaders } from "../src/security/transport";
 
 const requestSchema = z.object({
@@ -89,6 +90,32 @@ export default async function handler(request: Request) {
       }, 429, requestId);
     }
 
+    let deceptionAsset: { asset_id: string; asset_name: string; asset_type: string; hit_count: number; locator_hash: string } | null = null;
+    const locatorKey = `honeydb:${parsed.surface}:${parsed.pathCategory}`;
+    const assetLookup = await supabase.schema("security").rpc("record_deception_asset_hit", {
+      p_tenant_id: tenantId,
+      p_locator_hash: hashDeceptionLocator(locatorKey),
+    });
+    if (assetLookup.error) {
+      securityLog("deception_asset_hit_lookup_failed", {
+        requestId,
+        tenantId,
+        errorCode: safeErrorCode(assetLookup.error),
+        ...(safeErrorStatus(assetLookup.error) ? { errorStatus: safeErrorStatus(assetLookup.error) } : {}),
+      });
+    } else {
+      const row = Array.isArray(assetLookup.data) ? assetLookup.data[0] : assetLookup.data;
+      if (row?.asset_id) {
+        deceptionAsset = {
+          asset_id: row.asset_id,
+          asset_name: row.asset_name,
+          asset_type: row.asset_type,
+          hit_count: Number(row.hit_count ?? 0),
+          locator_hash: row.locator_hash,
+        };
+      }
+    }
+
     const inserted = await supabase.schema("security").from("security_events").insert({
       tenant_id: tenantId,
       subject_id: null,
@@ -104,6 +131,13 @@ export default async function handler(request: Request) {
         peerHash: parsed.peerHash,
         userAgentHash: parsed.userAgentHash,
         sensorRequestId: parsed.requestId,
+        ...(deceptionAsset ? {
+          deceptionAssetId: deceptionAsset.asset_id,
+          deceptionAssetType: deceptionAsset.asset_type,
+          deceptionAssetName: deceptionAsset.asset_name,
+          deceptionAssetHitCount: deceptionAsset.hit_count,
+          deceptionAssetLocatorHash: deceptionAsset.locator_hash,
+        } : {}),
       },
     }).select("id").single();
 
@@ -114,11 +148,47 @@ export default async function handler(request: Request) {
       eventType: "security.honeytrap.hit",
       aggregateId: inserted.data.id,
       dedupeKey: `honeytrap:${parsed.requestId}`,
-      payload: { securityEventId: inserted.data.id, surface: parsed.surface, pathCategory: parsed.pathCategory },
+      payload: {
+        securityEventId: inserted.data.id,
+        surface: parsed.surface,
+        pathCategory: parsed.pathCategory,
+        ...(deceptionAsset ? { deceptionAssetId: deceptionAsset.asset_id, deceptionAssetType: deceptionAsset.asset_type } : {}),
+      },
     }).catch((error) => securityLog("honeytrap_outbox_enqueue_failed", {
       requestId,
       errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR",
     }));
+
+    const ledgerResult = await supabase.schema("security").rpc("append_security_ledger_entry", {
+      p_tenant_id: tenantId,
+      p_action: "honeytrap_hit_recorded",
+      p_resource_type: "security_event",
+      p_resource_id: inserted.data.id,
+      p_request_id: requestId,
+      p_actor_type: "automation",
+      p_details: {
+        surface: parsed.surface,
+        method: parsed.method,
+        pathCategory: parsed.pathCategory,
+        peerHash: parsed.peerHash,
+        userAgentHash: parsed.userAgentHash,
+        sensorRequestId: parsed.requestId,
+        ...(deceptionAsset ? {
+          deceptionAssetId: deceptionAsset.asset_id,
+          deceptionAssetType: deceptionAsset.asset_type,
+          deceptionAssetHitCount: deceptionAsset.hit_count,
+        } : {}),
+      },
+    });
+    if (ledgerResult.error) {
+      securityLog("honeytrap_ledger_append_failed", {
+        requestId,
+        tenantId,
+        eventId: inserted.data.id,
+        errorCode: safeErrorCode(ledgerResult.error),
+        ...(safeErrorStatus(ledgerResult.error) ? { errorStatus: safeErrorStatus(ledgerResult.error) } : {}),
+      });
+    }
 
     securityLog("honeytrap_event_persisted", {
       requestId,
