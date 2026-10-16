@@ -5,6 +5,8 @@ import { scoreSubjectConnections } from "./graph";
 import { analyzeWithAI, buildAIAdvisoryEvidence } from "./ai";
 import { safeErrorCode, safeErrorStatus, securityLog } from "./observability";
 import { analyzeVelocity } from "./velocity";
+import { analyzeBotDefense } from "./botDefense";
+import { analyzeFraudGraph, analyzeValueJump, enforceFraudFloor } from "./fraud-intelligence";
 import { analyzeAccountTakeoverSignals, analyzeConcurrentSessionAnomalies } from "./detectors";
 import { analyzeAdvancedBotSignals, evaluateTenantPolicies, getBehaviorBaselineScore, ensureInvestigationCase, enqueueSecurityEvent, upsertFraudCluster } from "./platform";
 import { evaluateDefenseInDepth, scoreFloorForDecision } from "./firewall";
@@ -55,6 +57,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   for (const result of [deviceResult, ipResult, botResult, behaviorResult, anomalyResult, velocityResult, accountEventsResult, subjectSessionsResult]) if (result.error) throw result.error;
 
   const signals: Signal[] = [];
+  let fraudDecisionFloor: SecurityDecision = "ALLOW";
   const accountTakeover = analyzeAccountTakeoverSignals((accountEventsResult.data ?? []).map((event) => ({
     eventType: event.event_type,
     occurredAt: event.occurred_at,
@@ -92,14 +95,36 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   }
   const activityEvents = (velocityResult.data ?? []).map((event) => ({ occurredAt: event.occurred_at, eventType: event.event_type }));
   const velocity = analyzeVelocity(activityEvents);
-  const advancedBot = analyzeAdvancedBotSignals({
-    botEvents: (botResult.data ?? []).map((event) => ({
-      occurredAt: event.observed_at, isBot: event.is_bot, confidence: Number(event.confidence ?? 0),
-      signals: (event.signals ?? {}) as Record<string, unknown>,
-    })),
-    activityEvents,
-  });
-  if (advancedBot.score > 0) signals.push({ signalName: "advanced_bot_detection", source: "advanced_bot", score: advancedBot.score, confidence: advancedBot.confidence, evidence: { reasonCodes: advancedBot.reasonCodes, signalFlags: advancedBot.signalFlags, velocity: advancedBot.velocity, version: advancedBot.version } });
+  const botEvents = (botResult.data ?? []).map((event) => ({
+    occurredAt: event.observed_at,
+    isBot: event.is_bot,
+    confidence: Number(event.confidence ?? 0),
+    signals: (event.signals ?? {}) as Record<string, unknown>,
+  }));
+  const advancedBot = analyzeAdvancedBotSignals({ botEvents, activityEvents });
+  const corroboratedBot = analyzeBotDefense({ events: botEvents });
+  const combinedBotScore = Math.max(advancedBot.score, corroboratedBot.score);
+  const combinedBotConfidence = Math.max(advancedBot.confidence, corroboratedBot.confidence);
+  const combinedBotReasons = [...new Set([...advancedBot.reasonCodes, ...corroboratedBot.reasonCodes])];
+  const combinedBotFlags = [...new Set([...advancedBot.signalFlags, ...corroboratedBot.signalFlags])].slice(0, 16);
+  if (combinedBotScore > 0) {
+    signals.push({
+      signalName: "advanced_bot_detection",
+      source: "advanced_bot",
+      score: combinedBotScore,
+      confidence: combinedBotConfidence,
+      evidence: {
+        reasonCodes: combinedBotReasons,
+        signalFlags: combinedBotFlags,
+        velocity: advancedBot.velocity,
+        corroborationDecision: corroboratedBot.decision,
+        replayCount: corroboratedBot.replayCount,
+        eventCount: corroboratedBot.count10m,
+        legacyDetectorVersion: advancedBot.version,
+        detectorVersion: corroboratedBot.version,
+      },
+    });
+  }
   if (velocity.score > 0) signals.push({ signalName: "activity_velocity", source: "velocity", score: velocity.score, confidence: velocity.confidence, evidence: velocity });
   const anomalyScore = clamp(Number(behaviorResult.data?.anomaly_score ?? 0));
   if (anomalyScore > 0) {
@@ -139,11 +164,81 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
     }
   }
   const valueAnomaly = recentActivityAnomalies.find((anomaly) => anomaly.anomaly_type === "value_jump") ?? null;
+  if (valueAnomaly && valueAnomaly.evidence && typeof valueAnomaly.evidence === "object" && !Array.isArray(valueAnomaly.evidence)) {
+    const valueEvidence = valueAnomaly.evidence as Record<string, unknown>;
+    const previousValue = Number(valueEvidence.previousValue);
+    const currentValue = Number(valueEvidence.currentValue);
+    if (
+      Number.isFinite(previousValue) && previousValue >= 0 &&
+      Number.isFinite(currentValue) && currentValue >= 0
+    ) {
+      const analyzedValueJump = analyzeValueJump({
+        previousValue,
+        currentValue,
+        occurredAt: valueAnomaly.occurred_at,
+      });
+      const valueSignalIndex = signals.findIndex((signal) => signal.signalName === "value_jump_anomaly");
+      const existingValueScore = valueSignalIndex >= 0 ? signals[valueSignalIndex].score : 0;
+      const existingValueConfidence = valueSignalIndex >= 0 ? signals[valueSignalIndex].confidence ?? 0 : 0;
+      const strengthenedValueScore = Math.max(existingValueScore, analyzedValueJump.score);
+      const strengthenedValueConfidence = Math.max(existingValueConfidence, analyzedValueJump.confidence);
+      if (valueSignalIndex >= 0) {
+        signals[valueSignalIndex] = {
+          ...signals[valueSignalIndex],
+          score: strengthenedValueScore,
+          confidence: strengthenedValueConfidence,
+          evidence: { ...signals[valueSignalIndex].evidence, valueJumpIntelligence: analyzedValueJump },
+        };
+      } else if (analyzedValueJump.score > 0) {
+        signals.push({
+          signalName: "value_jump_anomaly",
+          source: "activity_anomaly",
+          score: analyzedValueJump.score,
+          confidence: analyzedValueJump.confidence,
+          evidence: { valueJumpIntelligence: analyzedValueJump },
+        });
+      }
+      fraudDecisionFloor = enforceFraudFloor(fraudDecisionFloor, strengthenedValueScore, strengthenedValueConfidence);
+    }
+  }
 
   let graphScoreInfo: Awaited<ReturnType<typeof scoreSubjectConnections>> | null = null;
+  let fraudGraphInfo: ReturnType<typeof analyzeFraudGraph> | null = null;
   if (input.subjectId) {
     graphScoreInfo = await scoreSubjectConnections({ tenantId: input.tenantId, subjectId: input.subjectId });
-    if (graphScoreInfo.connectionScore > 0) signals.push({ signalName: "graph_connection_risk", source: "graph", score: graphScoreInfo.connectionScore, confidence: 0.8, evidence: { riskyConnectionCount: graphScoreInfo.riskyConnectionCount, relatedSubjectCount: graphScoreInfo.relatedSubjectCount } });
+    fraudGraphInfo = analyzeFraudGraph({
+      edgeCount: graphScoreInfo.graph.edgeCount,
+      nodeCount: graphScoreInfo.graph.nodeCount,
+      edges: graphScoreInfo.graph.edges.map((edge) => ({
+        relationship: edge.relationship,
+        confidence: Number(edge.confidence ?? 0),
+        leftType: edge.left_type,
+        rightType: edge.right_type,
+      })),
+      relatedSubjects: graphScoreInfo.relatedSubjects.map((subject) => ({
+        subjectId: subject.subjectId,
+        sharedResources: subject.sharedResources,
+        confidence: subject.confidence,
+      })),
+    });
+    if (fraudGraphInfo.score > 0) {
+      signals.push({
+        signalName: "graph_connection_risk",
+        source: "graph_correlation",
+        score: fraudGraphInfo.score,
+        confidence: fraudGraphInfo.confidence,
+        evidence: {
+          reasonCodes: fraudGraphInfo.reasonCodes,
+          highConfidenceEdgeCount: fraudGraphInfo.highConfidenceEdgeCount,
+          independentRelationshipCount: fraudGraphInfo.independentRelationshipCount,
+          correlatedSubjectCount: fraudGraphInfo.correlatedSubjectCount,
+          multiResourceSubjectCount: fraudGraphInfo.multiResourceSubjectCount,
+          legacyConnectionScore: graphScoreInfo.connectionScore,
+          version: fraudGraphInfo.version,
+        },
+      });
+      fraudDecisionFloor = enforceFraudFloor(fraudDecisionFloor, fraudGraphInfo.score, fraudGraphInfo.confidence);
+    }
   }
 
   // AI is an advisory annotation only. Its score/action can never participate in
@@ -221,14 +316,16 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   const policyDecisionFloor = policyResult.decisionOverride
     ? scoreFloorForDecision(policyResult.decisionOverride)
     : 0;
+  const rank: Record<SecurityDecision, number> = { ALLOW: 0, MONITOR: 1, CHALLENGE: 2, REVIEW: 3, BLOCK: 4 };
+  const requiredFloor = rank[fraudDecisionFloor] > rank[firewallResult.minimumDecision]
+    ? fraudDecisionFloor : firewallResult.minimumDecision;
   const score = clamp(Math.max(
     prePolicyScore + policyResult.scoreDelta,
-    scoreFloorForDecision(firewallResult.minimumDecision),
+    scoreFloorForDecision(requiredFloor),
     policyDecisionFloor,
   ));
-  const rank: Record<SecurityDecision, number> = { ALLOW: 0, MONITOR: 1, CHALLENGE: 2, REVIEW: 3, BLOCK: 4 };
   const scoreDecision = decisionFor(score);
-  const decisionCandidates: SecurityDecision[] = [scoreDecision, firewallResult.minimumDecision];
+  const decisionCandidates: SecurityDecision[] = [scoreDecision, firewallResult.minimumDecision, fraudDecisionFloor];
   if (policyResult.decisionOverride) decisionCandidates.push(policyResult.decisionOverride);
   const decision = decisionCandidates.reduce((best, candidate) =>
     rank[candidate] > rank[best] ? candidate : best,
@@ -245,6 +342,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   const firewallAudit = {
     version: firewallResult.version,
     minimumDecision: firewallResult.minimumDecision,
+    fraudDecisionFloor,
     reasonCodes: firewallResult.reasonCodes,
     layers: firewallResult.layers.map((item) => ({
       layer: item.layer,
@@ -298,7 +396,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   const decisionInsert = await supabase.schema("security").from("risk_decisions").insert({
     assessment_id: assessmentInsert.data.id,
     decision,
-    reason_codes: [...finalSignals.map((signal) => signal.signalName), ...policyReasonCodes, ...firewallResult.reasonCodes],
+    reason_codes: [...finalSignals.map((signal) => signal.signalName), ...policyReasonCodes, ...firewallResult.reasonCodes, ...(fraudDecisionFloor !== "ALLOW" ? ["FRAUD_INTELLIGENCE_ESCALATION"] : [])],
     decision_version: "defense-in-depth-v1",
   }).select("id").single();
   if (decisionInsert.error) throw decisionInsert.error;
@@ -314,6 +412,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
         decision, score, riskLevel, version: "defense-in-depth-v1",
         policyMatches: policyResult.matched.map((policy) => policy.id),
         firewallMinimumDecision: firewallResult.minimumDecision,
+        fraudDecisionFloor,
         firewallReasonCodes: firewallResult.reasonCodes,
       },
     });
