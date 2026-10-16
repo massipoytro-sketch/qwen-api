@@ -41,6 +41,30 @@ describe("Part 5 deterministic attack replay", () => {
     })))).toThrow("REPLAY_TOO_MANY_EVENTS");
   });
 
+  it("rejects malformed event types, timestamps and decisions", () => {
+    expect(() => replaySecurityTimeline([
+      { sequence: 1, eventType: "../secrets", occurredAt: "2026-10-16T10:00:00Z", decision: "ALLOW", score: 0 },
+    ])).toThrow("REPLAY_EVENT_TYPE_INVALID");
+    expect(() => replaySecurityTimeline([
+      { sequence: 1, eventType: "event", occurredAt: "not-a-date", decision: "ALLOW", score: 0 },
+    ])).toThrow("REPLAY_TIMESTAMP_INVALID");
+    expect(() => replaySecurityTimeline([
+      { sequence: 1, eventType: "event", occurredAt: "2026-10-16T10:00:00Z", decision: "UNKNOWN" as never, score: 0 },
+    ])).toThrow("REPLAY_DECISION_INVALID");
+  });
+
+  it("caps reason codes per event before deduplication", () => {
+    const result = replaySecurityTimeline([{
+      sequence: 1,
+      eventType: "event",
+      occurredAt: "2026-10-16T10:00:00Z",
+      decision: "MONITOR",
+      score: 20,
+      reasonCodes: Array.from({ length: 100 }, (_, i) => `REASON_${i}`),
+    }]);
+    expect(result.reasonCodes).toHaveLength(32);
+  });
+
   it("does not perform any external operation", () => {
     const result = replaySecurityTimeline([]);
     expect(result).toEqual({
