@@ -1,8 +1,8 @@
 import { env } from "../config/env";
 
 /** Render terminates TLS, so production requests are validated through the forwarded scheme. */
-export function isSecureTransport(request: Request): boolean {
-  if (env.NODE_ENV !== "production") return true;
+export function isSecureTransport(request: Request, production = env.NODE_ENV === "production"): boolean {
+  if (!production) return true;
   const forwarded = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim().toLowerCase();
   if (forwarded) return forwarded === "https";
   return new URL(request.url).protocol === "https:";

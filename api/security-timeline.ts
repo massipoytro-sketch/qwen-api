@@ -5,6 +5,7 @@ import { supabase } from "../src/db/supabase";
 import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
 import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
+import { isSecureTransport, securityHeaders } from "../src/security/transport";
 
 const querySchema = z.object({
   tenantId: z.uuid(),
@@ -20,6 +21,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(J
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
+    ...securityHeaders(),
     ...(requestId ? { "x-request-id": requestId } : {}),
   },
 });
@@ -49,6 +51,8 @@ type TimelineItem = {
 export default async function handler(request: Request) {
   const requestIdHeader = request.headers.get("x-request-id") ?? "";
   const requestId = /^[a-zA-Z0-9._:-]{1,100}$/.test(requestIdHeader) ? requestIdHeader : crypto.randomUUID();
+
+  if (!isSecureTransport(request)) return json({ error: "TLS_REQUIRED", requestId }, 426, requestId);
 
   if (request.method !== "GET") return json({ error: "METHOD_NOT_ALLOWED", requestId }, 405, requestId);
   const expectedToken = env.SECURITY_OPS_TOKEN;
