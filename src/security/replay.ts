@@ -29,6 +29,7 @@ function finiteScore(value: number): number {
  * a sanitized event summary captured by the operator layer.
  */
 export function replaySecurityTimeline(events: ReplayEvent[]): ReplayResult {
+  if (!Array.isArray(events)) throw new Error("REPLAY_EVENTS_INVALID");
   if (events.length > 500) throw new Error("REPLAY_TOO_MANY_EVENTS");
 
   const ordered = [...events].sort((a, b) => a.sequence - b.sequence);
@@ -42,16 +43,27 @@ export function replaySecurityTimeline(events: ReplayEvent[]): ReplayResult {
     if (!Number.isInteger(event.sequence) || event.sequence !== index + 1) {
       throw new Error("REPLAY_SEQUENCE_INVALID");
     }
-    if (!event.eventType || event.eventType.length > 120) throw new Error("REPLAY_EVENT_TYPE_INVALID");
-    if (Number.isNaN(Date.parse(event.occurredAt))) throw new Error("REPLAY_TIMESTAMP_INVALID");
+    if (typeof event.eventType !== "string" || !/^[A-Za-z0-9_.:-]{1,120}$/.test(event.eventType)) {
+      throw new Error("REPLAY_EVENT_TYPE_INVALID");
+    }
+    if (typeof event.occurredAt !== "string" || !Number.isFinite(Date.parse(event.occurredAt))) {
+      throw new Error("REPLAY_TIMESTAMP_INVALID");
+    }
+    if (!["ALLOW", "MONITOR", "CHALLENGE", "REVIEW", "BLOCK"].includes(event.decision)) {
+      throw new Error("REPLAY_DECISION_INVALID");
+    }
+    if (typeof event.score !== "number") throw new Error("REPLAY_SCORE_INVALID");
+    if (event.reasonCodes !== undefined && !Array.isArray(event.reasonCodes)) {
+      throw new Error("REPLAY_REASON_CODES_INVALID");
+    }
 
     const decision = strictestDecision(previous, event.decision);
     if (decision !== previous) escalations += 1;
     previous = decision;
     decisions.push(decision);
 
-    for (const code of event.reasonCodes ?? []) {
-      if (/^[A-Z0-9_.:-]{1,100}$/.test(code)) reasonCodes.push(code);
+    for (const code of (event.reasonCodes ?? []).slice(0, 32)) {
+      if (typeof code === "string" && /^[A-Z0-9_.:-]{1,100}$/.test(code)) reasonCodes.push(code);
     }
   }
 
