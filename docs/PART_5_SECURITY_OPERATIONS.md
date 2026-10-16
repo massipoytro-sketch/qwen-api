@@ -15,7 +15,7 @@ HoneyDB remains isolated from the production security database. It sends only ca
 All operations below require HTTPS and `Authorization: Bearer <SECURITY_OPS_TOKEN>`. The token must be a server-side secret of at least 32 characters. The endpoint is disabled when the token is unset, and requests are rate limited.
 
 - `GET /api/internal/deception-assets?tenantId=<uuid>&limit=50` — list assets without revealing the original locator.
-- `POST /api/internal/deception-assets` — register an asset. Allowed locator keys are categorical forms such as `honeydb:admin:admin_login`, `route:/admin/login`, or `canary:backup:db-01`. Only the SHA-256 digest is stored; arbitrary URLs, query strings and credential-like values are rejected.
+- `POST /api/internal/deception-assets` — register an asset. Allowed locator keys are categorical forms such as `honeydb:admin:admin_login`, `route:/admin/login`, or `canary:backup:db-01`. Only the SHA-256 digest is stored; arbitrary URLs, query strings and credential-like values are rejected. For HoneyDB hits to update the registry, register the asset under the same tenant configured by `HONEY_TENANT_ID`.
 - `PATCH /api/internal/deception-assets` — change an asset to `active`, `disabled` or `retired`. Retired/disabled assets stop matching HoneyDB hits but are not deleted.
 
 The metadata schema is intentionally small: description, owner team, environment and tags. Never put secrets, request bodies, names/emails of suspected users, or raw network addresses in the registry.
@@ -35,7 +35,7 @@ The TypeScript replay engine is pure and offline. It:
 - bounds scores to 0–100 and reason-code counts;
 - supports only `dry_run` and `deterministic_simulation` storage modes.
 
-The database RPCs are `SECURITY DEFINER`, use a fixed empty search path with schema-qualified objects, validate tenant ownership and enforce bounded inputs. They are executable only by `service_role`. The replay tables have no direct client or service-role table privileges; reads and writes occur through the RPC boundary.
+Replay steps are written in atomic batches of at most 100. This avoids hundreds of network round trips and ensures a failed batch is rolled back without leaving a partially inserted batch. The database RPCs are `SECURITY DEFINER`, use a fixed empty search path with schema-qualified objects, validate tenant ownership and enforce bounded inputs. They are executable only by `service_role`. The replay tables have no direct client or service-role table privileges; reads and writes occur through the RPC boundary.
 
 ### Internal replay API
 
