@@ -300,22 +300,26 @@ export default async function handler(request: Request) {
     replayId = created.data as string;
 
     try {
-      for (const event of loaded.events) {
-        const action = event.decision === "ALLOW" ? "observe" : event.decision.toLowerCase();
-        const step = await supabase.schema("security").rpc("append_attack_replay_step", {
-          p_replay_id: replayId,
-          p_sequence_no: event.sequence,
-          p_event_type: event.eventType,
-          p_event_at: event.occurredAt,
-          p_action: action,
-          p_signal_codes: (event.reasonCodes ?? []).slice(0, 32),
-          p_evidence: {
+      for (let offset = 0; offset < loaded.events.length; offset += 100) {
+        const chunk = loaded.events.slice(offset, offset + 100);
+        const steps = chunk.map((event) => ({
+          sequenceNo: event.sequence,
+          eventType: event.eventType,
+          eventAt: event.occurredAt,
+          action: event.decision === "ALLOW" ? "observe" : event.decision.toLowerCase(),
+          signalCodes: (event.reasonCodes ?? []).slice(0, 8),
+          evidence: {
             decision: event.decision,
             score: Math.max(0, Math.min(100, Number(event.score) || 0)),
             replayEngineVersion: "deterministic-replay-v1",
           },
+        }));
+        const persisted = await supabase.schema("security").rpc("append_attack_replay_steps_batch", {
+          p_replay_id: replayId,
+          p_steps: steps,
         });
-        if (step.error) throw step.error;
+        if (persisted.error) throw persisted.error;
+        if (Number(persisted.data) !== chunk.length) throw new Error("REPLAY_BATCH_COUNT_MISMATCH");
       }
       const finalized = await supabase.schema("security").rpc("finalize_attack_replay", {
         p_replay_id: replayId,
