@@ -35,7 +35,7 @@ jobs:
           SUPABASE_URL: https://ci-placeholder.supabase.co
           SUPABASE_SERVER_KEY: ci-placeholder-not-a-real-secret
           PORT: "3210"
-          NODE_ENV: test
+          NODE_ENV: production
         run: |
           set -eu
           pnpm start > /tmp/gainiren-security-runtime.log 2>&1 &
@@ -58,15 +58,26 @@ jobs:
             --request POST --header 'Content-Type: application/json' \
             --data '{"tenantId":"00000000-0000-0000-0000-000000000000"}' \
             http://127.0.0.1:3210/api/security-check)
+          test "$code" = "400"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'X-Forwarded-Proto: https' --header 'Content-Type: application/json' \
+            --data '{"tenantId":"00000000-0000-0000-0000-000000000000"}' \
+            http://127.0.0.1:3210/api/security-check)
           test "$code" = "401"
 
           code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --request POST --header 'Content-Type: application/json' --data '{}' \
+            --request POST --header 'X-Forwarded-Proto: https' --header 'Content-Type: application/json' --data '{}' \
+            http://127.0.0.1:3210/api/challenge)
+          test "$code" = "401"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'X-Forwarded-Proto: https' --header 'Content-Type: application/json' --data '{}' \
             http://127.0.0.1:3210/api/security-event)
           test "$code" = "401"
 
           code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --request POST --header 'Content-Type: application/json' --data '{}' \
+            --request POST --header 'X-Forwarded-Proto: https' --header 'Content-Type: application/json' --data '{}' \
             http://127.0.0.1:3210/api/outbox-worker)
           test "$code" = "503"
 
@@ -75,6 +86,18 @@ jobs:
           test "$code" = "404"
 
           code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --request POST --header 'Content-Type: application/json' --data '{}' \
+            --request POST --header 'X-Forwarded-Proto: https' --header 'Content-Type: application/json' --data '{}' \
             http://127.0.0.1:3210/api/internal/honey-alert)
           test "$code" = "404"
+
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request GET --header 'X-Forwarded-Proto: https' \
+            http://127.0.0.1:3210/api/internal/security-timeline)
+          test "$code" = "404"
+
+          headers=$(curl --silent --dump-header - --output /dev/null \
+            --request POST --header 'X-Forwarded-Proto: https' --header 'Content-Type: application/json' \
+            --data '{}' http://127.0.0.1:3210/api/challenge)
+          printf '%s' "$headers" | grep -qi '^strict-transport-security:'
+          printf '%s' "$headers" | grep -qi '^content-security-policy:'
+          printf '%s' "$headers" | grep -qi '^x-content-type-options: nosniff'
