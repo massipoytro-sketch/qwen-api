@@ -5,6 +5,7 @@ import { supabase } from "../src/db/supabase";
 import { analyzeWithDuckDB, processSecurityOutboxBatch, saveAnalyticsRun, type OutboxEvent } from "../src/security/platform";
 import { hashValue } from "../src/security/utils";
 import { safeErrorCode, safeErrorStatus, securityLog } from "../src/security/observability";
+import { isSecureTransport, securityHeaders } from "../src/security/transport";
 import { withSecurityCircuitBreaker } from "../src/security/circuitBreaker";
 
 const requestSchema = z.object({ batchSize: z.number().int().min(1).max(100).default(25) }).strict();
@@ -41,7 +42,7 @@ const analyticsResponseSchema = z.object({
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
-  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" },
+  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "referrer-policy": "no-referrer", ...securityHeaders() },
 });
 
 function tokenMatches(supplied: string, expected: string) {
@@ -176,6 +177,7 @@ const handlers: Record<string, (event: OutboxEvent) => Promise<void>> = {
 };
 
 export default async function handler(request: Request) {
+  if (!isSecureTransport(request)) return json({ error: "TLS_REQUIRED" }, 426);
   if (request.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED" }, 405);
   if (!env.OUTBOX_WORKER_TOKEN) return json({ error: "WORKER_NOT_CONFIGURED" }, 503);
 
