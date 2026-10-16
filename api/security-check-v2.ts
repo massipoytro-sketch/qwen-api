@@ -8,6 +8,8 @@ import { securityLog, safeErrorCode, safeErrorStatus } from "../src/security/obs
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 import { authenticateRotatedTenantKey } from "../src/security/tenantAuth";
 import { reconcilePersistedDecision, recordEmergencySecurityControl } from "../src/security/reconcile";
+import { buildEnforcementContract } from "../src/security/enforcement";
+import { isSecureTransport, securityHeaders } from "../src/security/transport";
 import { env } from "../src/config/env";
 import type { SecurityCheckResult, SecurityDecision } from "../src/security/types";
 
@@ -47,6 +49,7 @@ const json = (
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
+    ...securityHeaders(),
     ...extraHeaders,
     ...(requestId ? { "x-request-id": requestId } : {}),
     ...(env.SECURITY_API_CORS_ORIGIN ? {
@@ -94,9 +97,20 @@ function safeControlReason(value: string | null | undefined, fallback: string): 
   return value && /^[A-Za-z0-9_.:-]{1,80}$/.test(value) ? value : fallback;
 }
 
+function enforcementReasonCodes(values: string[]): string[] {
+  return [...new Set(values.map((value) =>
+    value.toUpperCase().replace(/[^A-Z0-9_.:-]/g, "_").slice(0, 100),
+  ).filter((value) => /^[A-Z0-9_.:-]{1,100}$/.test(value)))].slice(0, 64);
+}
+
+function firewallReasonCodesFromResult(result: SecurityCheckResult): string[] {
+  return result.challengeRecommendation?.reasonCodes ?? [];
+}
+
 export default async function handler(request: Request) {
   const candidate = request.headers.get("x-request-id") ?? "";
   const requestId = /^[A-Za-z0-9._:-]{1,100}$/.test(candidate) ? candidate : crypto.randomUUID();
+  if (!isSecureTransport(request)) return json({ error: "TLS_REQUIRED", requestId }, 426, requestId);
   if (request.method === "OPTIONS") return json({}, 204, requestId);
   if (request.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED", requestId }, 405, requestId);
 
@@ -220,10 +234,16 @@ export default async function handler(request: Request) {
       }
       await finalizeIdempotency(parsed.tenantId, claimedIdempotencyHash, "completed", 423);
       idempotencyClaimed = false;
+      const enforcement = buildEnforcementContract({
+        decisions: ["BLOCK"],
+        requestId,
+        reasonCodes: enforcementReasonCodes(["SECURITY_CONTROL_BLOCK", controlMode, controlReason]),
+      });
       return json({
         error: "SECURITY_CONTROL_BLOCK",
         mode: controlMode,
         reasonCode: controlReason,
+        enforcement,
         requestId,
       }, 423, requestId);
     }
@@ -255,11 +275,17 @@ export default async function handler(request: Request) {
       }
       await finalizeIdempotency(parsed.tenantId, claimedIdempotencyHash, "completed", 200);
       idempotencyClaimed = false;
+      const enforcement = buildEnforcementContract({
+        decisions: ["BLOCK"],
+        requestId,
+        reasonCodes: enforcementReasonCodes(["RUNTIME_LOCKDOWN", runtimeValue.reasonCode]),
+      });
       return json({
         decision: "BLOCK",
         score: 100,
         riskLevel: "critical",
         challengeRecommendation: null,
+        enforcement,
         runtimeControl: { ...runtimeValue, mode: runtimeMode },
         securityControl: { mode: controlMode, reasonCode: controlReason, version: current?.version ?? 0 },
         requestId,
@@ -315,6 +341,7 @@ export default async function handler(request: Request) {
     }
 
     if (!result.assessmentId) throw new Error("SECURITY_ASSESSMENT_ID_MISSING");
+    const preReconciliation = { ...result };
     const reconciled = await reconcilePersistedDecision({
       tenantId: parsed.tenantId,
       result,
@@ -322,6 +349,20 @@ export default async function handler(request: Request) {
       reasonCodes: enforcedReasons.filter((code) => /^[A-Za-z0-9_.:-]{1,100}$/.test(code)).slice(0, 128),
       requestId,
     });
+    if (
+      rank[reconciled.decision] < rank[preReconciliation.decision] ||
+      reconciled.score < preReconciliation.score
+    ) {
+      securityLog("decision_reconciliation_downgrade_rejected", {
+        requestId,
+        tenantId: parsed.tenantId,
+        priorDecision: preReconciliation.decision,
+        reconciledDecision: reconciled.decision,
+        priorScore: preReconciliation.score,
+        reconciledScore: reconciled.score,
+      });
+      throw new Error("SECURITY_DECISION_RECONCILIATION_DOWNGRADE");
+    }
 
     result = {
       ...result,
@@ -336,10 +377,36 @@ export default async function handler(request: Request) {
       expiresInSeconds: 300,
     };
 
+    const enforcement = buildEnforcementContract({
+      decisions: [preReconciliation.decision, result.decision],
+      requestId,
+      reasonCodes: enforcementReasonCodes([
+        ...enforcedReasons,
+        ...reconciled.reasonCodes,
+        ...firewallReasonCodesFromResult(result),
+      ]),
+      challenge: result.challengeRecommendation ? {
+        ...result.challengeRecommendation,
+        reasonCodes: enforcementReasonCodes(result.challengeRecommendation.reasonCodes),
+      } : null,
+    });
+    if (enforcement.decision !== result.decision) {
+      // This should only be possible if a future caller accidentally passes a
+      // weaker post-reconciliation decision. Fail closed rather than return it.
+      securityLog("enforcement_contract_decision_mismatch", {
+        requestId,
+        tenantId: parsed.tenantId,
+        responseDecision: result.decision,
+        enforcementDecision: enforcement.decision,
+      });
+      throw new Error("ENFORCEMENT_DECISION_MISMATCH");
+    }
+
     await finalizeIdempotency(parsed.tenantId, claimedIdempotencyHash, "completed", 200);
     idempotencyClaimed = false;
     return json({
       ...result,
+      enforcement,
       runtimeControl: { ...runtimeValue, mode: runtimeMode },
       securityControl: {
         mode: controlMode,
