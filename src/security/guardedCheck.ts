@@ -7,15 +7,69 @@ const rank: Record<SecurityDecision, number> = {
   ALLOW: 0, MONITOR: 1, CHALLENGE: 2, REVIEW: 3, BLOCK: 4,
 };
 
+async function applyControlPlane(input: SecurityCheckInput, result: SecurityCheckResult): Promise<SecurityCheckResult> {
+  const global = await supabase.schema("security").from("global_control_plane")
+    .select("mode,reason_code,version,expires_at")
+    .eq("singleton", true)
+    .maybeSingle();
+  if (global.error || !global.data) throw global.error ?? new Error("CONTROL_PLANE_UNAVAILABLE");
+
+  const globalExpired = Boolean(global.data.expires_at && Date.parse(global.data.expires_at) <= Date.now());
+  const globalMode = globalExpired ? "normal" : global.data.mode;
+  const globalReason = typeof global.data.reason_code === "string" ? global.data.reason_code : "CONTROL_PLANE";
+
+  if (input.sessionId) {
+    const revoked = await supabase.schema("security").from("session_revocations")
+      .select("reason_code,expires_at")
+      .eq("tenant_id", input.tenantId)
+      .eq("session_id", input.sessionId)
+      .maybeSingle();
+    if (revoked.error) throw revoked.error;
+    const activeRevocation = revoked.data && (!revoked.data.expires_at || Date.parse(revoked.data.expires_at) > Date.now());
+    if (activeRevocation) {
+      securityLog("session_revocation_enforced", {
+        requestId: input.requestId ?? null,
+        tenantId: input.tenantId,
+        sessionId: input.sessionId,
+        reasonCode: revoked.data.reason_code,
+      });
+      return {
+        ...result,
+        decision: "BLOCK",
+        score: 100,
+        riskLevel: "critical",
+        challengeRecommendation: null,
+      };
+    }
+  }
+
+  if (globalMode === "lockdown") {
+    securityLog("global_lockdown_enforced", { requestId: input.requestId ?? null, tenantId: input.tenantId, version: global.data.version, reasonCode: globalReason });
+    return { ...result, decision: "BLOCK", score: 100, riskLevel: "critical", challengeRecommendation: null };
+  }
+  if (globalMode === "review_only" && rank[result.decision] < rank.REVIEW) {
+    securityLog("global_review_only_enforced", { requestId: input.requestId ?? null, tenantId: input.tenantId, version: global.data.version, reasonCode: globalReason });
+    return {
+      ...result,
+      decision: "REVIEW",
+      score: Math.max(70, result.score),
+      riskLevel: result.score >= 90 ? "critical" : "high",
+      challengeRecommendation: null,
+    };
+  }
+  return result;
+}
+
 /**
- * Applies operator-managed network controls after the core check. Bot and fraud
- * analysis is now performed by securityCheck itself, so the same session does
- * not trigger duplicate queries or inconsistent double scoring here.
+ * Applies the global emergency control plane and operator-managed network
+ * controls after the core deterministic assessment. Missing control state
+ * fails closed instead of allowing a protected request to continue.
  */
 export async function guardedSecurityCheck(
   input: SecurityCheckInput,
 ): Promise<SecurityCheckResult & { networkControl?: { mode: string; reasonCode: string } }> {
   let result = await securityCheck(input);
+  result = await applyControlPlane(input, result);
   if (!input.sessionId) return result;
 
   const session = await supabase.schema("security").from("sessions")
