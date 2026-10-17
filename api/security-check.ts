@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { hashValue } from "../src/security/utils";
 import { checkRateLimit } from "../src/security/rateLimit";
-import { securityCheck } from "../src/security/check";
+import { guardedSecurityCheck } from "../src/security/guardedCheck";
 import { securityLog } from "../src/security/observability";
 import { verifyAndConsumeRequestSignature } from "../src/security/requestSigning";
 import { authenticateRotatedTenantKey } from "../src/security/tenantAuth";
@@ -29,7 +29,7 @@ const json = (body: unknown, status = 200, requestId?: string) => new Response(
         "access-control-allow-origin": env.SECURITY_API_CORS_ORIGIN,
         "access-control-allow-headers": "authorization,content-type,x-request-id,x-gainiren-signature,x-gainiren-timestamp,x-gainiren-nonce,x-gainiren-key-id",
         "access-control-allow-methods": "POST,OPTIONS",
-        "vary": "Origin",
+        vary: "Origin",
       } : {}),
     },
   },
@@ -123,7 +123,7 @@ export default async function handler(request: Request) {
       }, 429, requestId);
     }
 
-    const result = await securityCheck({
+    const result = await guardedSecurityCheck({
       tenantId: parsed.tenantId,
       subjectId: parsed.subjectId,
       sessionId: parsed.sessionId,
