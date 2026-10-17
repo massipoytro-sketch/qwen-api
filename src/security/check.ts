@@ -2,6 +2,7 @@ import { z } from "zod";
 import { supabase } from "../db/supabase";
 import { env } from "../config/env";
 import { scoreSubjectConnections } from "./graph";
+import { analyzeAttackPath } from "./attackPath";
 import { analyzeWithAI, buildAIAdvisoryEvidence } from "./ai";
 import { safeErrorCode, safeErrorStatus, securityLog } from "./observability";
 import { analyzeVelocity } from "./velocity";
@@ -204,6 +205,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
 
   let graphScoreInfo: Awaited<ReturnType<typeof scoreSubjectConnections>> | null = null;
   let fraudGraphInfo: ReturnType<typeof analyzeFraudGraph> | null = null;
+  let attackPathInfo: ReturnType<typeof analyzeAttackPath> | null = null;
   if (input.subjectId) {
     graphScoreInfo = await scoreSubjectConnections({ tenantId: input.tenantId, subjectId: input.subjectId });
     fraudGraphInfo = analyzeFraudGraph({
@@ -238,6 +240,43 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
         },
       });
       fraudDecisionFloor = enforceFraudFloor(fraudDecisionFloor, fraudGraphInfo.score, fraudGraphInfo.confidence);
+    }
+
+    attackPathInfo = analyzeAttackPath({
+      subjectId: input.subjectId,
+      edges: graphScoreInfo.graph.edges.map((edge) => ({
+        leftType: edge.left_type,
+        leftId: edge.left_id,
+        relationship: edge.relationship,
+        rightType: edge.right_type,
+        rightId: edge.right_id,
+        confidence: Number(edge.confidence ?? 0),
+      })),
+      signals: signals.map((signal) => ({
+        signalName: signal.signalName,
+        score: signal.score,
+        confidence: signal.confidence ?? null,
+      })),
+      truncated: graphScoreInfo.graph.truncated,
+    });
+    if (attackPathInfo.score > 0) {
+      signals.push({
+        signalName: "attack_path_risk",
+        source: "attack_path_engine",
+        score: attackPathInfo.score,
+        confidence: attackPathInfo.confidence,
+        evidence: {
+          reasonCodes: attackPathInfo.reasonCodes,
+          pathPatterns: attackPathInfo.pathPatterns,
+          relatedSubjectCount: attackPathInfo.relatedSubjectCount,
+          directResourceTypes: attackPathInfo.directResourceTypes,
+          highConfidenceEdgeCount: attackPathInfo.highConfidenceEdgeCount,
+          maxPathDepth: attackPathInfo.maxPathDepth,
+          truncated: attackPathInfo.truncated,
+          version: attackPathInfo.version,
+        },
+      });
+      fraudDecisionFloor = enforceFraudFloor(fraudDecisionFloor, attackPathInfo.score, attackPathInfo.confidence);
     }
   }
 
@@ -378,6 +417,7 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
       policies: policyResult.matched.map((policy) => ({ id: policy.id, name: policy.name, reasonCode: policy.reasonCode })),
       policyCount: policyResult.policyCount,
       firewall: firewallAudit,
+      attackPath: attackPathInfo ? { score: attackPathInfo.score, confidence: attackPathInfo.confidence, reasonCodes: attackPathInfo.reasonCodes, pathPatterns: attackPathInfo.pathPatterns, relatedSubjectCount: attackPathInfo.relatedSubjectCount, version: attackPathInfo.version } : null,
       challengeRecommendation,
     },
   }).select("id").single();
@@ -523,5 +563,8 @@ export async function securityCheck(rawInput: SecurityCheckInput): Promise<Secur
   }
   const settled = await Promise.allSettled(backgroundTasks);
   for (const item of settled) if (item.status === "rejected") securityLog("security_background_task_failed", { requestId: input.requestId ?? null, tenantId: input.tenantId, errorCode: item.reason instanceof Error ? item.reason.name : "UNKNOWN_ERROR" });
-  return { decision, score, riskLevel, assessmentId: assessmentInsert.data.id, challengeRecommendation };
+  return {
+    decision, score, riskLevel, assessmentId: assessmentInsert.data.id, challengeRecommendation,
+    ...(attackPathInfo ? { attackPath: { score: attackPathInfo.score, confidence: attackPathInfo.confidence, reasonCodes: attackPathInfo.reasonCodes, pathPatterns: attackPathInfo.pathPatterns, relatedSubjectCount: attackPathInfo.relatedSubjectCount, version: attackPathInfo.version } } : {}),
+  };
 }
