@@ -1,5 +1,6 @@
 -- Part 5E: persistent emergency control plane and session revocation.
--- Do not apply automatically: reconcile the live migration-history drift first.
+-- Global audit records are written by the follow-up audit-fix migration because
+-- security.audit_ledger is tenant-scoped and requires tenant_id.
 create table if not exists security.global_control_plane (
   singleton boolean primary key default true check (singleton),
   mode text not null default 'normal' check (mode in ('normal','review_only','lockdown')),
@@ -64,10 +65,6 @@ begin
         incident_ref=p_incident_ref, expires_at=p_expires_at,
         version=current_row.version+1, changed_at=now(), updated_at=now()
     where singleton=true returning * into next_row;
-  insert into security.audit_ledger(tenant_id, action, resource_type, resource_id, actor_type, details)
-  values (null, 'global_control_plane_changed', 'global_control_plane', 'global',
-          'operator', jsonb_build_object('mode',p_mode,'reasonCode',p_reason_code,
-          'actorId',p_actor_id,'incidentRef',p_incident_ref,'version',next_row.version));
   return next_row;
 end;
 $$;
@@ -87,10 +84,12 @@ begin
   end if;
   insert into security.session_revocations(tenant_id,session_id,subject_id,reason_code,actor_id,request_id,expires_at)
   values (p_tenant_id,p_session_id,p_subject_id,p_reason_code,p_actor_id,p_request_id,p_expires_at)
-  on conflict (tenant_id,session_id) do nothing;
-  insert into security.audit_ledger(tenant_id, action, resource_type, resource_id, actor_type, details)
-  values (p_tenant_id,'security_session_revoked','session',p_session_id::text,'operator',
-          jsonb_build_object('subjectId',p_subject_id,'reasonCode',p_reason_code,'actorId',p_actor_id,'requestId',p_request_id));
+  on conflict (tenant_id,session_id) do update
+    set subject_id=excluded.subject_id,
+        reason_code=excluded.reason_code,
+        actor_id=excluded.actor_id,
+        request_id=excluded.request_id,
+        expires_at=excluded.expires_at;
   return true;
 end;
 $$;
