@@ -261,6 +261,6 @@ export function analyzeAttackPath(rawInput: {
     maxPathDepth,
     paths: examplePaths,
     truncated: input.truncated || visitedStates >= maxStates,
-    version: "attack-path-v1",
+    version: "attack-path-v1" as const,
   };
 }
