@@ -24,6 +24,6 @@ Part 5 combines attack-path protection, transaction firewall, global control pla
 - Stress/chaos helpers are bounded and do not perform destructive production mutations.
 
 ## Live production closure note
-The repository and CI validation gates are green on the validated Part 5E/5F head. Credentialed live negative API scenarios (lockdown, session revocation, and transaction no-commit) require the operator's production `SECURITY_OPS_TOKEN` / `SECURITY_RECOVERY_TOKEN`. Those credentials are intentionally not stored in GitHub or exposed to automated tooling. They remain a launch-time operational smoke check.
+The repository and CI validation gates are green on the validated Part 5E/5F head. Credentialed live negative API scenarios (lockdown, session revocation, and transaction no-commit) require the operator's production SECURITY_OPS_TOKEN / SECURITY_RECOVERY_TOKEN. Those credentials are intentionally not stored in GitHub or exposed to automated tooling. They remain a launch-time operational smoke check.
 
 Part 5 implementation is complete and fail-closed by design. No production wallet mutation is performed by the validation helpers.
