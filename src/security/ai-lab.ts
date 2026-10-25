@@ -25,11 +25,6 @@ export type AIModelDescriptor = Readonly<{
   featureSchema: string;
 }>;
 
-/**
- * Registry of models that have been validated in the isolated Shadow Engine.
- * This registry deliberately contains metadata only: production never imports
- * Python training code or copies unreviewed checkpoints into the security API.
- */
 export const AI_MODEL_REGISTRY: readonly AIModelDescriptor[] = [
   {
     id: "pyod-optimized-ensemble",
@@ -105,8 +100,17 @@ export const AI_MODEL_REGISTRY: readonly AIModelDescriptor[] = [
   },
 ];
 
+const AI_MODEL_IDS = [
+  "pyod-optimized-ensemble",
+  "pygod-dominant",
+  "river-half-space-trees",
+  "deepcase-sequence",
+  "network-unsw-nb15",
+  "openrouter-advisory",
+] as const satisfies readonly AIModelId[];
+
 const predictionSchema = z.object({
-  modelId: z.enum(AI_MODEL_REGISTRY.map((model) => model.id) as [AIModelId, ...AIModelId[]]),
+  modelId: z.enum(AI_MODEL_IDS),
   score: z.number().finite().min(0).max(100),
   confidence: z.number().finite().min(0).max(1),
   available: z.boolean(),
@@ -141,11 +145,6 @@ export function normalizeAIShadowPrediction(raw: unknown): AIShadowPrediction {
   return predictionSchema.parse(raw);
 }
 
-/**
- * Combines available model outputs without allowing an unavailable model to
- * lower risk. The result is advisory only and cannot produce an enforcement
- * decision or authorize a transaction.
- */
 export function aggregateAIShadowPredictions(rawPredictions: readonly unknown[]): AIShadowAggregate {
   const predictions = rawPredictions.map(normalizeAIShadowPrediction);
   const available = predictions.filter((prediction) => prediction.available);
@@ -188,7 +187,6 @@ export function aggregateAIShadowPredictions(rawPredictions: readonly unknown[])
   };
 }
 
-/** Hard invariant used by Part 7: AI output can never become an enforcement action. */
 export function assertAIShadowOnly(result: AIShadowAggregate): true {
   if (result.mode !== "shadow" || result.advisoryOnly !== true) {
     throw new Error("AI_ENFORCEMENT_BOUNDARY_VIOLATION");
