@@ -68,7 +68,7 @@ describe("AI shadow lab", () => {
   it("fails closed to an explicit unavailable state", () => {
     const result = aggregateAIShadowPredictions([
       {
-        modelId: "pyod-dominant",
+        modelId: "pygod-dominant",
         score: 0,
         confidence: 0,
         available: false,
