@@ -5,12 +5,13 @@ import { aggregateAIShadowPredictions } from "./ai-lab";
 const baseInput = (overrides: Partial<DecisionInput> = {}): DecisionInput => ({
   subjectRef: "test-subject",
   deterministic: { identityRisk: 10, behaviorRisk: 10, graphRisk: 10, transactionRisk: 10, accountHistoryRisk: 10 },
+  signals: {},
   controls: { hardBlock: false, globalLockdown: false, transactionFirewallDenied: false, verifiedChallengePassed: false },
   policyVersion: "test-policy-v1",
   ...overrides,
 });
 
-describe("Part 7 recommendation engine", () => {
+describe("Part 7A recommendation engine", () => {
   it("returns a recommendation without side effects", () => {
     const result = recommendSecurityAction(baseInput());
     expect(result.action).toBe("ALLOW");
@@ -64,6 +65,56 @@ describe("Part 7 recommendation engine", () => {
     const result = recommendSecurityAction(baseInput({ ai }));
     expect(result.aiContribution).toBe(0);
     expect(result.reasonCodes).toContain("AI_NOT_USED");
+  });
+
+  it("treats VPN as an access challenge, never as fraud proof", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { vpnDetected: true } }));
+    expect(result.action).toBe("CHALLENGE");
+    expect(result.reasonCodes).toContain("VPN_DETECTED_ACCESS_RESTRICTION");
+    expect(result.reasonCodes).toContain("DISABLE_VPN_PROXY_TOR_TO_CONTINUE");
+  });
+
+  it("treats proxy/Tor as access conditions, not automatic bans", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { proxyDetected: true, torDetected: true } }));
+    expect(result.action).toBe("CHALLENGE");
+    expect(result.action).not.toBe("PERMANENT_BAN");
+  });
+
+  it("does not punish a fingerprint change by itself", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { fingerprintChanged: true } }));
+    expect(result.action).toBe("ALLOW");
+    expect(result.reasonCodes).toContain("FINGERPRINT_CHANGED_NOT_FRAUD_PROOF");
+  });
+
+  it("holds a confirmed duplicate account for review rather than deleting the primary automatically", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { duplicateAccountConfirmed: true } }));
+    expect(result.action).toBe("HOLD_REWARDS");
+    expect(result.requiresHumanApproval).toBe(true);
+    expect(result.reasonCodes).toContain("SECONDARY_ACCOUNT_RESTRICTED_PENDING_REVIEW");
+  });
+
+  it("does not permanently ban a merely suspected duplicate account", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { duplicateAccountSuspected: true } }));
+    expect(result.action).not.toBe("PERMANENT_BAN");
+    expect(result.reasonCodes).toContain("DUPLICATE_ACCOUNT_REQUIRES_REVIEW");
+  });
+
+  it("holds rewards for confirmed reward fraud or malicious automation", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { rewardFraudConfirmed: true } }));
+    expect(result.action).toBe("HOLD_REWARDS");
+    expect(result.requiresHumanApproval).toBe(true);
+  });
+
+  it("does not permanently ban an unsuccessful security abuse attempt by itself", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { securityAbuseAttemptConfirmed: true } }));
+    expect(result.action).not.toBe("PERMANENT_BAN");
+    expect(result.action).toBe("ALLOW");
+  });
+
+  it("requires human approval for confirmed credential/cookie theft or successful compromise", () => {
+    const result = recommendSecurityAction(baseInput({ signals: { credentialOrCookieTheftConfirmed: true } }));
+    expect(result.action).toBe("PERMANENT_BAN");
+    expect(result.requiresHumanApproval).toBe(true);
   });
 
   it("requires human review for critical deterministic risk", () => {
