@@ -1,7 +1,18 @@
 import { z } from "zod";
-import type { AIShadowAggregate } from "./ai-lab";
 
 export const DECISION_ENGINE_VERSION = "part7-decision-v1" as const;
+
+const aiEvidenceSchema = z.object({
+  schemaVersion: z.literal("ai_shadow_signal_v1"),
+  mode: z.literal("shadow"),
+  advisoryOnly: z.literal(true),
+  score: z.number().finite().min(0).max(100),
+  confidence: z.number().finite().min(0).max(1),
+  modelCount: z.number().int().nonnegative().max(100),
+  availableModelCount: z.number().int().nonnegative().max(100),
+  predictions: z.array(z.unknown()).max(100),
+  reasonCodes: z.array(z.string().min(1).max(100)).max(64),
+});
 
 /** Pure recommendation only: no account, wallet, session, transaction, or enforcement side effects. */
 export const decisionInputSchema = z.object({
@@ -19,7 +30,7 @@ export const decisionInputSchema = z.object({
     transactionFirewallDenied: z.boolean().default(false),
     verifiedChallengePassed: z.boolean().default(false),
   }),
-  ai: z.custom<AIShadowAggregate>().optional(),
+  ai: aiEvidenceSchema.optional(),
   policyVersion: z.string().min(1).max(64).default("gainiren-policy-v1"),
 });
 
@@ -66,18 +77,13 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
   }
 
   const baseScore = clamp(deterministicRisk(input.deterministic));
-  const aiUsable = input.ai?.mode === "shadow"
-    && input.ai.advisoryOnly === true
-    && input.ai.availableModelCount > 0
-    && Number.isFinite(input.ai.score)
-    && input.ai.score >= 0
-    && input.ai.score <= 100;
+  const aiUsable = input.ai !== undefined && input.ai.availableModelCount > 0;
   // At most 15 points of final risk can originate from AI.
-  const aiContribution = aiUsable ? clamp(input.ai!.score) * 0.15 : 0;
+  const aiContribution = aiUsable ? clamp(input.ai.score) * 0.15 : 0;
   const riskScore = round(clamp(baseScore * 0.85 + aiContribution));
   const reasons: string[] = [];
   if (baseScore >= 70) reasons.push("HIGH_DETERMINISTIC_RISK");
-  if (aiUsable && input.ai!.score >= 70) reasons.push("AI_HIGH_RISK_ADVISORY");
+  if (aiUsable && input.ai.score >= 70) reasons.push("AI_HIGH_RISK_ADVISORY");
   if (!aiUsable) reasons.push("AI_NOT_USED");
   if (input.controls.verifiedChallengePassed) reasons.push("CHALLENGE_ALREADY_PASSED");
 
