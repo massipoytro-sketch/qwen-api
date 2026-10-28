@@ -105,10 +105,11 @@ describe("Part 7A recommendation engine", () => {
     expect(result.requiresHumanApproval).toBe(true);
   });
 
-  it("does not permanently ban an unsuccessful security abuse attempt by itself", () => {
+  it("holds activity for a confirmed unsuccessful security-abuse attempt", () => {
     const result = recommendSecurityAction(baseInput({ signals: { securityAbuseAttemptConfirmed: true } }));
+    expect(result.action).toBe("HOLD_REWARDS");
+    expect(result.requiresHumanApproval).toBe(true);
     expect(result.action).not.toBe("PERMANENT_BAN");
-    expect(result.action).toBe("ALLOW");
   });
 
   it("requires human approval for confirmed credential/cookie theft or successful compromise", () => {
