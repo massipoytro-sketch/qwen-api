@@ -110,12 +110,10 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
 
   const baseScore = clamp(deterministicRisk(input.deterministic));
   const aiUsable = input.ai !== undefined && input.ai.availableModelCount > 0;
-  // AI is advisory only and can contribute at most 15 points to final risk.
   const aiContribution = aiUsable ? clamp(input.ai.score) * 0.15 : 0;
   const riskScore = round(clamp(baseScore * 0.85 + aiContribution));
   const reasons: string[] = [];
 
-  // VPN/proxy/Tor are access conditions, not proof of fraud.
   const networkRestriction = signals.vpnDetected || signals.proxyDetected || signals.torDetected;
   if (signals.vpnDetected) reasons.push("VPN_DETECTED_ACCESS_RESTRICTION");
   if (signals.proxyDetected) reasons.push("PROXY_DETECTED_ACCESS_RESTRICTION");
@@ -133,10 +131,19 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
   if (!aiUsable) reasons.push("AI_NOT_USED");
   if (input.controls.verifiedChallengePassed) reasons.push("CHALLENGE_ALREADY_PASSED");
 
-  // Confirmed reward abuse is severe but still kept separate from compromise-based permanent bans.
+  if (signals.credentialOrCookieTheftConfirmed || signals.successfulUnauthorizedAccessConfirmed || signals.successfulExploitConfirmed) {
+    return result(input.subjectRef, "PERMANENT_BAN", 100, round(baseScore), round(aiContribution), input.policyVersion,
+      [...reasons, "PERMANENT_ENFORCEMENT_REQUIRES_HUMAN_APPROVAL"], true);
+  }
+
   if (signals.rewardFraudConfirmed || signals.maliciousAutomationConfirmed) {
     return result(input.subjectRef, "HOLD_REWARDS", Math.max(riskScore, 75), round(baseScore), round(aiContribution), input.policyVersion,
       [...reasons, "REWARD_ACTIVITY_HELD_PENDING_REVIEW"], true);
+  }
+
+  if (signals.securityAbuseAttemptConfirmed) {
+    return result(input.subjectRef, "HOLD_REWARDS", Math.max(riskScore, 60), round(baseScore), round(aiContribution), input.policyVersion,
+      [...reasons, "SECURITY_ABUSE_ACTIVITY_HELD_PENDING_REVIEW"], true);
   }
 
   if (signals.duplicateAccountConfirmed) {
@@ -144,7 +151,6 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
       [...reasons, "SECONDARY_ACCOUNT_RESTRICTED_PENDING_REVIEW"], true);
   }
 
-  // Infrastructure indicators require the user to change access conditions, not a ban.
   if (networkRestriction) {
     return result(input.subjectRef, "CHALLENGE", Math.max(40, riskScore), round(baseScore), round(aiContribution), input.policyVersion,
       [...reasons, "DISABLE_VPN_PROXY_TOR_TO_CONTINUE"], false);
