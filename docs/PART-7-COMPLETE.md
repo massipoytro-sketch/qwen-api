@@ -32,3 +32,7 @@ AI remains advisory. It cannot authorize a transaction denied by the firewall, w
 ## Completion gate
 
 Part 7 is complete only when the repository CI, typecheck, lint, unit tests, runtime smoke, CodeQL, and HoneyDB checks are green on the final head. Production credential-gated negative API checks remain launch-time operational validation and are not replaced by unit tests.
+
+## Finality
+
+Part 7 is the final project part. No Part 8 is planned. The final gate is a clean, reproducible security decision path with fail-closed authoritative controls and reviewable enforcement recommendations.
