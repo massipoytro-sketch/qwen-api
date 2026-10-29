@@ -45,6 +45,17 @@ describe("Part 7B enforcement and review", () => {
     expect(result.expiresAtMs).toBe(1_000 + 10 * 24 * 60 * 60 * 1000);
     expect(result.requiresAudit).toBe(true);
   });
+  it("supports a bounded extension only from suspended", () => {
+    const result = recommendReviewTransition({ currentStatus: "SUSPENDED", action: "EXTEND", nowMs: 1_000, extensionMs: 2 * 60 * 60 * 1000 });
+    expect(result.status).toBe("SUSPENDED");
+    expect(result.expiresAtMs).toBe(1_000 + 2 * 60 * 60 * 1000);
+  });
+  it("rejects restore from an already active subject", () => {
+    expect(() => recommendReviewTransition({ currentStatus: "ACTIVE", action: "RESTORE", nowMs: 1 })).toThrow("INVALID_REVIEW_TRANSITION");
+  });
+  it("rejects extension from a non-suspended subject", () => {
+    expect(() => recommendReviewTransition({ currentStatus: "RESTRICTED", action: "EXTEND", nowMs: 1 })).toThrow("INVALID_REVIEW_TRANSITION");
+  });
   it("requires audit for permanent review action", () => {
     expect(recommendReviewTransition({ currentStatus: "SUSPENDED", action: "PERMANENT_BAN", nowMs: 1 })).toEqual({ status: "BANNED", requiresAudit: true });
   });
