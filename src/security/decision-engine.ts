@@ -14,6 +14,21 @@ const aiEvidenceSchema = z.object({
   reasonCodes: z.array(z.string().min(1).max(100)).max(64),
 });
 
+const defaultSignals = {
+  vpnDetected: false,
+  proxyDetected: false,
+  torDetected: false,
+  fingerprintChanged: false,
+  duplicateAccountSuspected: false,
+  duplicateAccountConfirmed: false,
+  securityAbuseAttemptConfirmed: false,
+  credentialOrCookieTheftConfirmed: false,
+  successfulUnauthorizedAccessConfirmed: false,
+  successfulExploitConfirmed: false,
+  rewardFraudConfirmed: false,
+  maliciousAutomationConfirmed: false,
+} as const;
+
 export const decisionInputSchema = z.object({
   subjectRef: z.string().min(1).max(128),
   deterministic: z.object({
@@ -24,19 +39,19 @@ export const decisionInputSchema = z.object({
     accountHistoryRisk: z.number().finite().min(0).max(100),
   }),
   signals: z.object({
-    vpnDetected: z.boolean().default(false),
-    proxyDetected: z.boolean().default(false),
-    torDetected: z.boolean().default(false),
-    fingerprintChanged: z.boolean().default(false),
-    duplicateAccountSuspected: z.boolean().default(false),
-    duplicateAccountConfirmed: z.boolean().default(false),
-    securityAbuseAttemptConfirmed: z.boolean().default(false),
-    credentialOrCookieTheftConfirmed: z.boolean().default(false),
-    successfulUnauthorizedAccessConfirmed: z.boolean().default(false),
-    successfulExploitConfirmed: z.boolean().default(false),
-    rewardFraudConfirmed: z.boolean().default(false),
-    maliciousAutomationConfirmed: z.boolean().default(false),
-  }).default({}),
+    vpnDetected: z.boolean().default(defaultSignals.vpnDetected),
+    proxyDetected: z.boolean().default(defaultSignals.proxyDetected),
+    torDetected: z.boolean().default(defaultSignals.torDetected),
+    fingerprintChanged: z.boolean().default(defaultSignals.fingerprintChanged),
+    duplicateAccountSuspected: z.boolean().default(defaultSignals.duplicateAccountSuspected),
+    duplicateAccountConfirmed: z.boolean().default(defaultSignals.duplicateAccountConfirmed),
+    securityAbuseAttemptConfirmed: z.boolean().default(defaultSignals.securityAbuseAttemptConfirmed),
+    credentialOrCookieTheftConfirmed: z.boolean().default(defaultSignals.credentialOrCookieTheftConfirmed),
+    successfulUnauthorizedAccessConfirmed: z.boolean().default(defaultSignals.successfulUnauthorizedAccessConfirmed),
+    successfulExploitConfirmed: z.boolean().default(defaultSignals.successfulExploitConfirmed),
+    rewardFraudConfirmed: z.boolean().default(defaultSignals.rewardFraudConfirmed),
+    maliciousAutomationConfirmed: z.boolean().default(defaultSignals.maliciousAutomationConfirmed),
+  }).default(defaultSignals),
   controls: z.object({
     hardBlock: z.boolean().default(false),
     globalLockdown: z.boolean().default(false),
@@ -97,7 +112,6 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
     return result(input.subjectRef, "DENY_TRANSACTION", 100, 100, 0, input.policyVersion, ["TRANSACTION_FIREWALL_DENIED"], true);
   }
 
-  // Confirmed high-impact compromise/security abuse has explicit policy precedence.
   if (signals.credentialOrCookieTheftConfirmed || signals.successfulUnauthorizedAccessConfirmed || signals.successfulExploitConfirmed) {
     const reasons = [
       ...(signals.credentialOrCookieTheftConfirmed ? ["CONFIRMED_CREDENTIAL_OR_COOKIE_THEFT"] : []),
@@ -109,8 +123,9 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
   }
 
   const baseScore = clamp(deterministicRisk(input.deterministic));
-  const aiUsable = input.ai !== undefined && input.ai.availableModelCount > 0;
-  const aiContribution = aiUsable ? clamp(input.ai.score) * 0.15 : 0;
+  const aiUsable = (input.ai?.availableModelCount ?? 0) > 0;
+  const aiScore = input.ai?.score ?? 0;
+  const aiContribution = aiUsable ? clamp(aiScore) * 0.15 : 0;
   const riskScore = round(clamp(baseScore * 0.85 + aiContribution));
   const reasons: string[] = [];
 
@@ -127,14 +142,9 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
   if (signals.maliciousAutomationConfirmed) reasons.push("CONFIRMED_MALICIOUS_AUTOMATION");
   if (signals.securityAbuseAttemptConfirmed) reasons.push("CONFIRMED_SECURITY_ABUSE_ATTEMPT");
   if (baseScore >= 70) reasons.push("HIGH_DETERMINISTIC_RISK");
-  if (aiUsable && input.ai.score >= 70) reasons.push("AI_HIGH_RISK_ADVISORY");
+  if (aiUsable && aiScore >= 70) reasons.push("AI_HIGH_RISK_ADVISORY");
   if (!aiUsable) reasons.push("AI_NOT_USED");
   if (input.controls.verifiedChallengePassed) reasons.push("CHALLENGE_ALREADY_PASSED");
-
-  if (signals.credentialOrCookieTheftConfirmed || signals.successfulUnauthorizedAccessConfirmed || signals.successfulExploitConfirmed) {
-    return result(input.subjectRef, "PERMANENT_BAN", 100, round(baseScore), round(aiContribution), input.policyVersion,
-      [...reasons, "PERMANENT_ENFORCEMENT_REQUIRES_HUMAN_APPROVAL"], true);
-  }
 
   if (signals.rewardFraudConfirmed || signals.maliciousAutomationConfirmed) {
     return result(input.subjectRef, "HOLD_REWARDS", Math.max(riskScore, 75), round(baseScore), round(aiContribution), input.policyVersion,
