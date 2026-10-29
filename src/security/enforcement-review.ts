@@ -39,18 +39,31 @@ export function recommendEnforcement(raw: z.input<typeof enforcementRequestSchem
   return { ...common, status: "ACTIVE", requiresReview: false };
 }
 
-export function recommendReviewTransition(input: {
-  currentStatus: EnforcementStatus;
-  action: ReviewAction;
-  nowMs: number;
-  extensionMs?: number;
-}): Readonly<{ status: EnforcementStatus; expiresAtMs?: number; requiresAudit: true }> {
-  const parsed = z.object({
-    currentStatus: enforcementRequestSchema.shape.currentStatus,
-    action: z.enum(["RESTORE", "KEEP_RESTRICTION", "EXTEND", "HOLD_BALANCE", "SUSPEND_10D", "PERMANENT_BAN"]),
-    nowMs: z.number().int().nonnegative(),
-    extensionMs: z.number().int().positive().max(90 * 24 * 60 * 60 * 1000).optional(),
-  }).parse(input);
+const reviewTransitionSchema = z.object({
+  currentStatus: enforcementRequestSchema.shape.currentStatus,
+  action: z.enum(["RESTORE", "KEEP_RESTRICTION", "EXTEND", "HOLD_BALANCE", "SUSPEND_10D", "PERMANENT_BAN"]),
+  nowMs: z.number().int().nonnegative(),
+  extensionMs: z.number().int().positive().max(90 * 24 * 60 * 60 * 1000).optional(),
+});
+
+function assertAllowedReviewTransition(currentStatus: EnforcementStatus, action: ReviewAction): void {
+  const allowed: Record<ReviewAction, readonly EnforcementStatus[]> = {
+    RESTORE: ["MONITORED", "CHALLENGE", "RESTRICTED", "REWARDS_HELD", "SUSPENDED"],
+    KEEP_RESTRICTION: ["RESTRICTED", "SUSPENDED"],
+    EXTEND: ["SUSPENDED"],
+    HOLD_BALANCE: ["MONITORED", "CHALLENGE", "RESTRICTED", "REWARDS_HELD", "SUSPENDED"],
+    SUSPEND_10D: ["MONITORED", "CHALLENGE", "RESTRICTED", "REWARDS_HELD", "SUSPENDED"],
+    PERMANENT_BAN: ["MONITORED", "CHALLENGE", "RESTRICTED", "REWARDS_HELD", "SUSPENDED"],
+  };
+
+  if (!allowed[action].includes(currentStatus)) {
+    throw new Error(`INVALID_REVIEW_TRANSITION:${currentStatus}->${action}`);
+  }
+}
+
+export function recommendReviewTransition(input: z.input<typeof reviewTransitionSchema>): Readonly<{ status: EnforcementStatus; expiresAtMs?: number; requiresAudit: true }> {
+  const parsed = reviewTransitionSchema.parse(input);
+  assertAllowedReviewTransition(parsed.currentStatus, parsed.action);
 
   if (parsed.action === "RESTORE") return { status: "ACTIVE", requiresAudit: true };
   if (parsed.action === "KEEP_RESTRICTION") return { status: "RESTRICTED", requiresAudit: true };
