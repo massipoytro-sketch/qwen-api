@@ -26,7 +26,7 @@ export type ReviewAction = "RESTORE" | "KEEP_RESTRICTION" | "EXTEND" | "HOLD_BAL
 export function recommendEnforcement(raw: z.input<typeof enforcementRequestSchema>): EnforcementResult {
   const input = enforcementRequestSchema.parse(raw);
   const d = input.decision;
-  const common = { schemaVersion: ENFORCEMENT_SCHEMA_VERSION as const, subjectRef: d.subjectRef, action: d.action, sideEffectsPerformed: false as const };
+  const common = { schemaVersion: ENFORCEMENT_SCHEMA_VERSION, subjectRef: d.subjectRef, action: d.action, sideEffectsPerformed: false as const };
 
   if (d.action === "LOCKDOWN") return { ...common, status: "RESTRICTED", requiresReview: true, reviewReason: "GLOBAL_LOCKDOWN_POLICY" };
   if (d.action === "BLOCK" || d.action === "DENY_TRANSACTION") return { ...common, status: "RESTRICTED", requiresReview: true, reviewReason: "HARD_SECURITY_CONTROL" };
