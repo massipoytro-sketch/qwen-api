@@ -2,6 +2,7 @@ import { z } from "zod";
 import { supabase } from "../db/supabase";
 import type { SecurityCheckResult, SecurityDecision } from "./types";
 import { safeErrorCode, safeErrorStatus, securityLog } from "./observability";
+import { buildPart7DecisionInput } from "./part7-adapter";
 
 const decisionSchema = z.enum(["ALLOW", "MONITOR", "CHALLENGE", "REVIEW", "BLOCK"]);
 const riskLevelSchema = z.enum(["unknown", "low", "medium", "high", "critical"]);
@@ -15,14 +16,40 @@ const finalizationResultSchema = z.object({
   finalizedAt: z.string().datetime(),
 }).strict();
 
+function rank(decision: SecurityDecision): number {
+  return { ALLOW: 0, MONITOR: 1, CHALLENGE: 2, REVIEW: 3, BLOCK: 4 }[decision];
+}
+
+function actionToSecurityDecision(action: string): SecurityDecision {
+  switch (action) {
+    case "LOCKDOWN":
+    case "BLOCK":
+    case "DENY_TRANSACTION":
+    case "PERMANENT_BAN":
+      return "BLOCK";
+    case "HOLD_REWARDS":
+    case "HUMAN_REVIEW":
+      return "REVIEW";
+    case "TEMP_RESTRICTION":
+    case "CHALLENGE":
+      return "CHALLENGE";
+    case "MONITOR":
+      return "MONITOR";
+    case "ALLOW":
+      return "ALLOW";
+    default:
+      throw new Error("PART7_UNKNOWN_ACTION");
+  }
+}
+
 /**
- * Atomically reconciles post-check controls (tenant control plane, network
- * control, and runtime lockdown/review policies) with the assessment, stored
- * decision and append-only ledger. The database RPC only permits escalation.
+ * Atomically reconciles post-check controls with the central Part 7 policy
+ * decision, stored decision and append-only ledger. Part 7 can only escalate
+ * the authoritative Parts 1-6 result; it can never weaken a hard decision.
  */
 export async function reconcilePersistedDecision(input: {
   tenantId: string;
-  result: SecurityCheckResult;
+  result: SecurityCheckResult & { networkControl?: { mode: string; reasonCode: string } };
   enforcementSource: string;
   reasonCodes?: string[];
   requestId?: string;
@@ -34,24 +61,67 @@ export async function reconcilePersistedDecision(input: {
       score: z.number().finite().min(0).max(100),
       riskLevel: riskLevelSchema,
       assessmentId: z.uuid(),
+      challengeRecommendation: z.object({
+        type: z.enum(["step_up_mfa", "proof_of_work", "risk_based_verification"]),
+        reasonCodes: z.array(z.string().min(1).max(100)).max(64),
+        expiresInSeconds: z.number().int().nonnegative().max(86400),
+      }).nullable().optional(),
+      networkControl: z.object({
+        mode: z.string().min(1).max(40),
+        reasonCode: z.string().min(1).max(100),
+      }).optional(),
     }).strict(),
     enforcementSource: z.string().min(1).max(80).regex(/^[A-Za-z0-9_.:-]+$/),
     reasonCodes: z.array(z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:-]+$/)).max(128).default([]),
     requestId: z.string().max(200).optional(),
   }).strict().parse(input);
 
+  const { input: part7Input } = buildPart7DecisionInput({
+    subjectRef: parsed.tenantId + ":" + (parsed.requestId ?? parsed.result.assessmentId),
+    result: parsed.result,
+  });
+  const part7Action = (await import("./decision-engine")).recommendSecurityAction(part7Input);
+  const part7Decision = actionToSecurityDecision(part7Action.action);
+  const finalDecision = rank(part7Decision) >= rank(parsed.result.decision)
+    ? part7Decision
+    : parsed.result.decision;
+  const finalScore = Math.max(parsed.result.score, part7Action.riskScore);
+  const finalRiskLevel = finalScore >= 90 ? "critical" : finalScore >= 70 ? "high" : finalScore >= 40 ? "medium" : finalScore > 0 ? "low" : "unknown";
+  const finalReasonCodes = [...new Set([
+    ...parsed.reasonCodes,
+    ...part7Action.reasonCodes,
+    `PART7_ACTION_${part7Action.action}`,
+    `PART7_RISK_${Math.round(part7Action.riskScore)}`,
+  ])].slice(0, 128);
+
+  if (rank(finalDecision) < rank(parsed.result.decision) || finalScore < parsed.result.score) {
+    throw new Error("PART7_DECISION_DOWNGRADE_BLOCKED");
+  }
+
   const response = await supabase.schema("security").rpc("finalize_security_decision", {
     p_tenant_id: parsed.tenantId,
     p_assessment_id: parsed.result.assessmentId,
-    p_decision: parsed.result.decision,
-    p_score: parsed.result.score,
-    p_risk_level: parsed.result.riskLevel,
-    p_reason_codes: [...new Set(parsed.reasonCodes)].slice(0, 128),
-    p_enforcement_source: parsed.enforcementSource,
+    p_decision: finalDecision,
+    p_score: finalScore,
+    p_risk_level: finalRiskLevel,
+    p_reason_codes: finalReasonCodes,
+    p_enforcement_source: `part7:${parsed.enforcementSource}`,
     p_request_id: parsed.requestId ?? null,
   });
   if (response.error) throw response.error;
-  return finalizationResultSchema.parse(response.data);
+  const finalized = finalizationResultSchema.parse(response.data);
+  if (rank(finalized.decision) < rank(finalDecision) || finalized.score < finalScore) {
+    securityLog("part7_finalization_downgrade_rejected", {
+      requestId: parsed.requestId ?? null,
+      tenantId: parsed.tenantId,
+      expectedDecision: finalDecision,
+      actualDecision: finalized.decision,
+      expectedScore: finalScore,
+      actualScore: finalized.score,
+    });
+    throw new Error("PART7_FINALIZATION_DOWNGRADE");
+  }
+  return finalized;
 }
 
 /** Emergency controls may deny before creating a risk assessment; still ledger them. */
