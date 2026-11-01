@@ -3,6 +3,9 @@ on:
   push:
     branches:
       - 'tmp/export-full-repo-2026-11-01'
+  pull_request:
+    branches:
+      - main
 jobs:
   export:
     runs-on: ubuntu-latest
