@@ -1,0 +1,20 @@
+name: Temporary repository export
+on:
+  push:
+    branches:
+      - main
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create repository archive
+        run: git archive --format=zip --output=GainiRen-Shield-qwen-api-main.zip HEAD
+      - name: Upload repository archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: GainiRen-Shield-qwen-api-main
+          path: GainiRen-Shield-qwen-api-main.zip
+          if-no-files-found: error
