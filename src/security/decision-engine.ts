@@ -124,9 +124,9 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
 
   const baseScore = clamp(deterministicRisk(input.deterministic));
   const aiUsable = (input.ai?.availableModelCount ?? 0) > 0;
-  const aiScore = input.ai?.score ?? 0;
-  const aiContribution = aiUsable ? clamp(aiScore) * 0.15 : 0;
-  const riskScore = round(clamp(baseScore * 0.85 + aiContribution));
+  // AI is retained as advisory evidence only. It must never change risk scores or decisions.
+  const aiContribution = 0;
+  const riskScore = round(baseScore);
   const reasons: string[] = [];
 
   const networkRestriction = signals.vpnDetected || signals.proxyDetected || signals.torDetected;
@@ -142,8 +142,8 @@ export function recommendSecurityAction(raw: DecisionInput): DecisionRecommendat
   if (signals.maliciousAutomationConfirmed) reasons.push("CONFIRMED_MALICIOUS_AUTOMATION");
   if (signals.securityAbuseAttemptConfirmed) reasons.push("CONFIRMED_SECURITY_ABUSE_ATTEMPT");
   if (baseScore >= 70) reasons.push("HIGH_DETERMINISTIC_RISK");
-  if (aiUsable && aiScore >= 70) reasons.push("AI_HIGH_RISK_ADVISORY");
-  if (!aiUsable) reasons.push("AI_NOT_USED");
+  if (aiUsable) reasons.push("AI_ADVISORY_ONLY_NOT_USED_FOR_DECISION");
+  else reasons.push("AI_MODELS_UNAVAILABLE");
   if (input.controls.verifiedChallengePassed) reasons.push("CHALLENGE_ALREADY_PASSED");
 
   if (signals.rewardFraudConfirmed || signals.maliciousAutomationConfirmed) {
