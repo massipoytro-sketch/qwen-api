@@ -1,21 +1,40 @@
 # Part 6 — AI Lab / Shadow Intelligence
 
-Part 6 integrates the already-trained Shadow Engine algorithms into GainiRen Shield through a strict shadow boundary.
+Part 6 is the integration boundary for Shadow Engine. It is **not yet production-complete**. The repository currently contains the AI evidence contract, model registry metadata, and an optional OpenRouter advisory adapter. The external Shadow Engine model artifacts and live inference adapters have not yet passed the required end-to-end validation.
 
-## Validated model set
+## Current implementation status
 
-- **PyOD optimized ensemble** — ECOD, COPOD, HBOS, Isolation Forest, LODA and PCA candidates; primary anomaly signal.
-- **PyGOD DOMINANT** — graph anomaly signal for account/device/referral relationships.
-- **River HalfSpaceTrees** — streaming anomaly/drift signal.
-- **DeepCASE** — sequence anomaly signal; remains dependency-isolated because it is a legacy research stack.
-- **Network anomaly detector** — network-flow signal; provenance-gated and not treated as reward-fraud validation.
-- **OpenRouter advisory** — bounded language-model evidence analysis already present in the production service.
+- **AI evidence contract:** implemented in `src/security/ai-lab.ts`.
+- **OpenRouter advisory:** bounded provider adapter exists in `src/security/ai.ts`; disabled by default and controlled by server-side environment variables.
+- **Shadow Engine registry:** PyOD, PyGOD, River, DeepCASE and network detector entries are metadata/contracts, not proof that production model artifacts are trained, deployed or callable.
+- **Production adapter:** `src/security/part7-adapter.ts` currently marks all Shadow Engine models unavailable until validated artifacts and runtime adapters are actually deployed.
+- **Training validation:** pending. A GitHub Actions run that fails before executing steps, or a hosted training job rejected for lack of compute credits, is not a completed training or validation run.
 
-The Shadow Engine training workflow has already completed its seven-stage validation run. Part 6 therefore does not retrain duplicate models inside the production TypeScript service.
+## Model candidates
+
+- **PyOD ensemble:** ECOD, COPOD, HBOS, Isolation Forest, LODA and PCA candidates.
+- **PyGOD DOMINANT:** graph anomaly candidate for account/device/referral relationships.
+- **River HalfSpaceTrees:** streaming anomaly/drift candidate.
+- **DeepCASE:** sequence anomaly candidate; remains dependency-isolated until compatibility and licensing checks pass.
+- **Network anomaly detector:** network-flow candidate. Public network-intrusion benchmarks do not prove reward-fraud performance.
+- **OpenRouter advisory:** language-model explanation of bounded security evidence; it is not a detector and is not a source of truth.
+
+## Required model acceptance gates
+
+A model is not marked available until all of the following are recorded:
+
+1. Dataset provenance, license, permitted use, and PII review.
+2. Reproducible training command and pinned environment.
+3. Train/calibration/test split with leakage checks.
+4. Baseline comparison and class-appropriate metrics.
+5. False-positive and false-negative review on a GainiRen-relevant evaluation set.
+6. Saved artifact with checksum, manifest, feature schema, and model version.
+7. Runtime adapter smoke test, timeout/failure test, and bounded output validation.
+8. Production-like shadow evaluation before enabling the model in the registry.
+
+External datasets such as bot detection or network intrusion benchmarks are useful research benchmarks, but their labels are not equivalent to confirmed GainiRen reward abuse.
 
 ## Production boundary
-
-`src/security/ai-lab.ts` is metadata/contract code. It does **not** import Python packages, execute unreviewed checkpoints, or copy research datasets into production.
 
 Every model output must be normalized to:
 
@@ -29,17 +48,10 @@ Every model output must be normalized to:
 
 Unavailable models are excluded from the aggregate rather than being treated as zero-risk evidence. If all models are unavailable, the aggregate explicitly reports `AI_MODELS_UNAVAILABLE`.
 
-## Enforcement rule
+## Enforcement and scoring rule
 
-AI is advisory only in Part 6. The aggregate is never an authorization, wallet mutation, challenge, suspension, or ban decision. Part 7 remains the authoritative policy/enforcement layer and must preserve all deterministic hard blocks and global lockdown rules.
-
-## Model provenance gates
-
-- PyOD/PyGOD/River: validated in the isolated Shadow Engine pipeline; production use still requires artifact/version deployment and runtime evaluation.
-- DeepCASE: isolated compatibility boundary remains mandatory.
-- Network model: public network-intrusion metrics do not prove reward-fraud performance.
-- AnomalyGFM and any model with unresolved code/weight/dataset licensing are intentionally **not** in the production registry.
+AI is advisory-only. Neither a language model nor a detector aggregate may change deterministic risk scores, detector labels, routing, authentication, challenges, account state, wallet balances, or enforcement. AI output may be stored for investigation and displayed as an explanation, but must not downgrade or escalate an authoritative decision. Part 7 remains the deterministic policy/enforcement authority.
 
 ## Part 7 hand-off
 
-Part 7 may consume the normalized AI shadow aggregate as one evidence source alongside deterministic risk, fraud graph, transaction history, behavior, account history, and policy controls. It must never allow an AI signal to downgrade a hard block or authorize a transaction denied by the firewall.
+Part 7 may retain the normalized AI shadow aggregate as separate evidence for human review. Hard blocks, global lockdown, transaction firewall denials, and all deterministic policy outcomes remain unchanged regardless of AI output.
