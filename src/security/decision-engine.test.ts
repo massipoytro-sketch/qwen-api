@@ -46,15 +46,25 @@ describe("Part 7A recommendation engine", () => {
     expect(result.action).toBe("DENY_TRANSACTION");
   });
 
-  it("caps AI contribution so AI alone cannot trigger a restrictive action", () => {
-    const ai = aggregateAIShadowPredictions([{
+  it("never lets AI evidence change deterministic scores or decisions", () => {
+    const baseline = recommendSecurityAction(baseInput());
+    const highAI = aggregateAIShadowPredictions([{
       modelId: "pyod-optimized-ensemble", score: 100, confidence: 1,
-      available: true, latencyMs: 1, reasonCodes: ["test"],
+      available: true, latencyMs: 1, reasonCodes: ["AI_HIGH_RISK"],
     }]);
-    const result = recommendSecurityAction(baseInput({ ai }));
-    expect(result.aiContribution).toBe(15);
-    expect(result.riskScore).toBeLessThan(25);
-    expect(result.action).toBe("ALLOW");
+    const lowAI = aggregateAIShadowPredictions([{
+      modelId: "pyod-optimized-ensemble", score: 0, confidence: 1,
+      available: true, latencyMs: 1, reasonCodes: ["AI_LOW_RISK"],
+    }]);
+    const highResult = recommendSecurityAction(baseInput({ ai: highAI }));
+    const lowResult = recommendSecurityAction(baseInput({ ai: lowAI }));
+    expect(highResult.aiContribution).toBe(0);
+    expect(lowResult.aiContribution).toBe(0);
+    expect(highResult.riskScore).toBe(baseline.riskScore);
+    expect(lowResult.riskScore).toBe(baseline.riskScore);
+    expect(highResult.action).toBe(baseline.action);
+    expect(lowResult.action).toBe(baseline.action);
+    expect(highResult.reasonCodes).toContain("AI_ADVISORY_ONLY_NOT_USED_FOR_DECISION");
   });
 
   it("ignores AI when every model is unavailable", () => {
@@ -64,7 +74,7 @@ describe("Part 7A recommendation engine", () => {
     }]);
     const result = recommendSecurityAction(baseInput({ ai }));
     expect(result.aiContribution).toBe(0);
-    expect(result.reasonCodes).toContain("AI_NOT_USED");
+    expect(result.reasonCodes).toContain("AI_MODELS_UNAVAILABLE");
   });
 
   it("treats VPN as an access challenge, never as fraud proof", () => {
