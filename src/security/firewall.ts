@@ -199,6 +199,7 @@ export function evaluateDefenseInDepth(rawInput: {
     const relatedCount = finite(fraudSignal.evidence?.relatedSubjectCount)
       ? fraudSignal.evidence.relatedSubjectCount : 0;
     const action: FirewallAction =
+      fraudSignal.signalName === "attack_path_risk" && fraudSignal.score >= 85 && confidence >= 0.85 ? "REVIEW" :
       fraudSignal.signalName === "value_jump_anomaly" && fraudSignal.score >= 90 && confidence >= 0.8 ? "REVIEW" :
       fraudSignal.signalName === "graph_connection_risk" && fraudSignal.score >= 80 && relatedCount >= 3 ? "REVIEW" :
       fraudSignal.score >= 60 ? "MONITOR" : "ALLOW";

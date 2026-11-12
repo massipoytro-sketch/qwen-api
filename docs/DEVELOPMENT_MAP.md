@@ -279,3 +279,22 @@ Every new dependency must have:
 - [x] Cross-origin access is disabled by default; configure a specific origin only when a browser client needs it.
 - [ ] End-to-end DB transaction tests with provisioned test tenant/subject.
 - [ ] Production deployment and live negative tests remain pending.
+
+
+## Part 5C / 5D implementation status — feature branch
+
+The `feat/part-5c-5d-attack-path-transaction-firewall` branch contains the first integrated implementation of the Part 5C attack-path engine and Part 5D transaction preflight firewall.
+
+- [x] Bounded, tenant-scoped graph expansion and traversal caps.
+- [x] Correlation of path patterns with identity, device, network, bot, behavior, value and transaction signals.
+- [x] Attack-path evidence feeding the deterministic risk and firewall decision.
+- [x] Signed/rate-limited/idempotent server-to-server transaction preflight endpoint.
+- [x] Transaction risk history, decision reconciliation and hash-chained audit.
+- [x] Time-bound per-subject transaction holds/blocks with escalation and expiry.
+- [x] Unit tests for path correlation, weak/empty evidence, cyclic traversal, transaction escalation and adaptive lock expiry.
+- [ ] Merge only after GitHub CI passes.
+- [ ] Reconcile Supabase migration drift, then apply the Part 5C/5D migration to the Shield database.
+- [ ] Integrate the preflight call into every authoritative GainiRen wallet/reward/withdrawal mutation; reject commits on timeout, non-2xx or `commitAllowed !== true`.
+- [ ] Run an isolated end-to-end negative test against the deployed Shield API and a test wallet ledger.
+
+The endpoint cannot atomically commit a wallet mutation because the authoritative wallet ledger belongs to the main GainiRen application. Part 5D is not production-complete until that backend integration has been deployed and tested.

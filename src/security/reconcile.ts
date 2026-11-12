@@ -54,6 +54,9 @@ export async function reconcilePersistedDecision(input: {
   reasonCodes?: string[];
   requestId?: string;
 }) {
+  // Whitelist only the fields the atomic database reconciliation consumes.
+  // SecurityCheckResult may also carry challenge/graph/network annotations; those
+  // must not make a strict control-plane contract reject a valid assessment.
   const parsed = z.object({
     tenantId: z.uuid(),
     result: z.object({
@@ -74,7 +77,15 @@ export async function reconcilePersistedDecision(input: {
     enforcementSource: z.string().min(1).max(80).regex(/^[A-Za-z0-9_.:-]+$/),
     reasonCodes: z.array(z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:-]+$/)).max(128).default([]),
     requestId: z.string().max(200).optional(),
-  }).strict().parse(input);
+  }).strict().parse({
+    ...input,
+    result: {
+      decision: input.result.decision,
+      score: input.result.score,
+      riskLevel: input.result.riskLevel,
+      assessmentId: input.result.assessmentId,
+    },
+  });
 
   const { input: part7Input } = buildPart7DecisionInput({
     subjectRef: parsed.tenantId + ":" + (parsed.requestId ?? parsed.result.assessmentId),
